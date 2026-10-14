@@ -36,6 +36,8 @@ Prerequisites: Go 1.25+, Docker Desktop.
 | `dsn reingest -into <db-url>` | Rebuild history from the raw archive into an empty database (after a parser upgrade). |
 | `dsn extract [-o out.json] <save-copy>` | Print what a save contains (debug). |
 
+Example: `go run ./cmd/dsn serve -no-watch` 
+
 Settings (flag, env var, or a `.env` file at the repo root; see `.env.example`): `-db`/`DSN_DB` (default `postgres://dsn:dsn@localhost:5433/dsn`),
 `-saves`/`DSN_SAVES` (auto-detects `Documents\EA SPORTS College Football 27\Saves`),
 `-data`/`DSN_DATA`, `-schema-dir`/`DSN_SCHEMAS`, `-media`/`DSN_MEDIA`, `-addr`/`DSN_ADDR`.

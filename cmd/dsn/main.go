@@ -17,6 +17,7 @@ commands:
 }
 
 func main() {
+	loadDotEnv(".env")
 	cmd := "serve"
 	args := os.Args[1:]
 	if len(args) > 0 && args[0] != "" && args[0][0] != '-' {

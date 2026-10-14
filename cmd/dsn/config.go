@@ -1,9 +1,12 @@
 package main
 
 import (
+	"bufio"
 	"flag"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 type config struct {
@@ -14,6 +17,40 @@ type config struct {
 	MediaDir  string
 	Addr      string
 	NoWatch   bool
+}
+
+// loadDotEnv reads KEY=VALUE lines from path into the environment. Variables
+// already set in the real environment win, so a one-off override still works.
+func loadDotEnv(path string) {
+	f, err := os.Open(path)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		k, v, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		k, v = strings.TrimSpace(k), strings.Trim(strings.TrimSpace(v), `"'`)
+		if _, set := os.LookupEnv(k); !set {
+			os.Setenv(k, v)
+		}
+	}
+}
+
+// dbHost names the database server without credentials, for logs.
+func dbHost(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return "(unparsed DB url)"
+	}
+	return u.Host + u.Path
 }
 
 func env(k, d string) string {

@@ -36,11 +36,48 @@ Prerequisites: Go 1.25+, Docker Desktop.
 | `dsn reingest -into <db-url>` | Rebuild history from the raw archive into an empty database (after a parser upgrade). |
 | `dsn extract [-o out.json] <save-copy>` | Print what a save contains (debug). |
 
-Settings (flag or env): `-db`/`DSN_DB` (default `postgres://dsn:dsn@localhost:5433/dsn`),
+Settings (flag, env var, or a `.env` file at the repo root; see `.env.example`): `-db`/`DSN_DB` (default `postgres://dsn:dsn@localhost:5433/dsn`),
 `-saves`/`DSN_SAVES` (auto-detects `Documents\EA SPORTS College Football 27\Saves`),
 `-data`/`DSN_DATA`, `-schema-dir`/`DSN_SCHEMAS`, `-media`/`DSN_MEDIA`, `-addr`/`DSN_ADDR`.
 
 Dev tools: `go run ./cmd/tabledump <save>` lists raw tables; `go run ./cmd/schemadump -tables X,Y <save>` prints field types.
+
+## Database: local Docker or hosted
+
+By default the server uses the Docker Postgres from `docker-compose.yml`, so
+the data lives on whichever machine runs it. To keep one history across all
+your machines, point every machine at the same hosted Postgres (Neon,
+Supabase, Prisma Postgres, Railway, Render, or any plain Postgres 14+):
+
+1. Create a database and copy its **direct** connection string. Pooled
+   URLs also work if you append `&default_query_exec_mode=exec`.
+2. On each machine, copy `.env.example` to `.env` (gitignored) and set
+   ```
+   DSN_DB=postgres://USER:PASSWORD@HOST:5432/DBNAME?sslmode=require
+   ```
+3. Run `go run ./cmd/dsn serve` as usual. The startup log prints
+   `database host=...` so you can confirm which one it's using. The schema
+   is created automatically on first connect.
+
+A real `DSN_DB` environment variable or `-db` flag overrides `.env`, so
+`-db postgres://dsn:dsn@localhost:5433/dsn?sslmode=disable` gets you back to
+local Docker for a one-off.
+
+**Moving your existing local data up** (run once, from the machine that has it):
+```bash
+docker compose exec -T db pg_dump -U dsn -Fc dsn > dsn.dump
+docker run --rm -i postgres:17 pg_restore --no-owner --no-privileges -d "<hosted connection string>" < dsn.dump
+```
+
+Notes:
+- Two machines can run at the same time. Ingests of one dynasty are
+  serialized by a database lock, and only the newest save moves the live
+  timeline.
+- The raw save archive (`data/archive`, used by `dsn reingest`) stays on each
+  machine. To keep it in one place too, set `DSN_DATA` to a synced folder such
+  as OneDrive.
+- The database is about 0.5 GB with four dynasties, so check your provider's
+  storage limit.
 
 ## Layout
 

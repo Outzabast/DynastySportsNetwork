@@ -65,11 +65,13 @@ func newLogger() *slog.Logger {
 }
 
 func openPipeline(ctx context.Context, c config) (*pipeline, error) {
+	log := newLogger()
+	log.Info("database", "host", dbHost(c.DB))
 	st, err := store.Open(ctx, c.DB)
 	if err != nil {
 		return nil, err
 	}
-	return &pipeline{cfg: c, store: st, log: newLogger()}, nil
+	return &pipeline{cfg: c, store: st, log: log}, nil
 }
 
 // runIngest copies and ingests explicit save files (oldest first by mtime).

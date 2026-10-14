@@ -188,6 +188,7 @@ type Team struct {
 	Color        string
 	AltColor     string
 	Conference   string
+	Division     string // "" unless the conference is split
 	W, L         int
 	CW, CL       int
 	ConfStanding int
@@ -249,7 +250,7 @@ func (q *Queries) Teams(ctx context.Context, c *Ctx, season int) (map[int]*Team,
 	q.mu.Unlock()
 	rows, err := q.s.DB.Query(ctx, `SELECT t.team_id, t.display_name, t.short_name, t.long_name, t.nick_name, t.asset_name, t.primary_color, t.secondary_color,
 		ts.conference, ts.wins, ts.losses, ts.conf_wins, ts.conf_losses, ts.conf_standing, ts.streak, ts.ap_rank, ts.coaches_rank, ts.cfp_rank,
-		ts.off_rank, ts.def_rank, ts.recruiting_rank, ts.head_coach_row, ts.stats, ts.team_id IS NOT NULL
+		ts.off_rank, ts.def_rank, ts.recruiting_rank, ts.head_coach_row, ts.stats, ts.team_id IS NOT NULL, COALESCE(ts.division, '')
 		FROM team t LEFT JOIN team_season ts ON ts.team_id = t.team_id AND ts.branch_id = $2 AND ts.season_index = $3
 		WHERE t.dynasty_id = $1`, c.Dynasty, c.Branch, season)
 	if err != nil {
@@ -263,7 +264,7 @@ func (q *Queries) Teams(ctx context.Context, c *Ctx, season int) (map[int]*Team,
 		var w, l, cw, cl, cs, st, ap, co, cfp, off, def, rr, hc *int
 		var stats []byte
 		if err := rows.Scan(&t.ID, &t.Name, &t.Short, &t.Long, &t.Nick, &t.Asset, &t.Color, &t.AltColor, &conf, &w, &l, &cw, &cl, &cs, &st, &ap, &co, &cfp,
-			&off, &def, &rr, &hc, &stats, &t.HasSeason); err != nil {
+			&off, &def, &rr, &hc, &stats, &t.HasSeason, &t.Division); err != nil {
 			return nil, err
 		}
 		if conf != nil {
@@ -320,13 +321,58 @@ type Game struct {
 	Stadium      string
 	BowlName     string
 	GameOfWeek   bool
+	GameType     string // see Kind
 	HomeBox      Stats
 	AwayBox      Stats
 }
 
+// Kind classifies the game: conference, nonconference, conf_championship,
+// bowl, playoff or national_championship. Games stored before the game type
+// was recorded fall back to what the bowl name says.
+func (g *Game) Kind() string {
+	if g.GameType != "" {
+		return g.GameType
+	}
+	switch {
+	case strings.Contains(g.BowlName, "National Championship"):
+		return "national_championship"
+	case strings.HasPrefix(g.BowlName, "CFP"):
+		return "playoff"
+	case g.BowlName != "":
+		return "bowl"
+	}
+	return ""
+}
+
+// TypeLabel is the short tag shown on scoreboards and schedules.
+func (g *Game) TypeLabel() string {
+	switch g.Kind() {
+	case "conference":
+		return "Conference"
+	case "nonconference":
+		return "Non-Conference"
+	case "conf_championship":
+		return "Conference Championship"
+	case "bowl", "playoff":
+		return g.BowlName
+	case "national_championship":
+		return "National Championship"
+	}
+	return ""
+}
+
+// Postseason reports bowl and CFP games.
+func (g *Game) Postseason() bool {
+	switch g.Kind() {
+	case "bowl", "playoff", "national_championship":
+		return true
+	}
+	return false
+}
+
 const gameCols = `season_index, game_row, week, week_type, status, played, home_team, away_team, home_score, away_score, home_quarters, away_quarters,
 	home_ot, away_ot, overtime, month, day, day_of_week, time_of_day, network, attendance, temperature, weather, wind, wind_speed, stadium, bowl_name,
-	game_of_week, home_box, away_box`
+	game_of_week, home_box, away_box, game_type`
 
 func scanGames(rows pgx.Rows) ([]*Game, error) {
 	defer rows.Close()
@@ -336,7 +382,7 @@ func scanGames(rows pgx.Rows) ([]*Game, error) {
 		var hb, ab []byte
 		if err := rows.Scan(&g.Season, &g.Row, &g.Week, &g.WeekType, &g.Status, &g.Played, &g.Home, &g.Away, &g.HomeScore, &g.AwayScore, &g.HomeQ, &g.AwayQ,
 			&g.HomeOT, &g.AwayOT, &g.Overtime, &g.Month, &g.Day, &g.DayOfWeek, &g.TimeOfDay, &g.Network, &g.Attendance, &g.Temperature, &g.Weather, &g.Wind,
-			&g.WindSpeed, &g.Stadium, &g.BowlName, &g.GameOfWeek, &hb, &ab); err != nil {
+			&g.WindSpeed, &g.Stadium, &g.BowlName, &g.GameOfWeek, &hb, &ab, &g.GameType); err != nil {
 			return nil, err
 		}
 		json.Unmarshal(hb, &g.HomeBox)
@@ -767,12 +813,18 @@ type Coach struct {
 	Conf, Natl            int
 	PlayoffW, PlayoffL    int
 	IsUser                bool
+	Key                   string // CoachKey; links to /coach/{key}
+	YearsCoaching         int
+	SeasonsWithTeam       int
+	HomeState             string
 }
+
+// Name returns "First Last".
+func (k *Coach) Name() string { return strings.TrimSpace(k.First + " " + k.Last) }
 
 // Coaches returns a team's coaching staff for a season (team -1 = all).
 func (q *Queries) Coaches(ctx context.Context, c *Ctx, season, team int) ([]*Coach, error) {
-	rows, err := q.s.DB.Query(ctx, `SELECT coach_row, first_name, last_name, position, team_id, age, asset_name, wins, losses, school_wins, school_losses,
-		bowl_wins, bowl_losses, conf_titles, natl_titles, playoff_wins, playoff_losses, is_user FROM coach_season
+	rows, err := q.s.DB.Query(ctx, `SELECT `+coachCols+` FROM coach_season
 		WHERE branch_id = $1 AND season_index = $2 AND ($3 < 0 OR team_id = $3) AND team_id >= 0
 		ORDER BY CASE position WHEN 'HeadCoach' THEN 0 WHEN 'OffensiveCoordinator' THEN 1 ELSE 2 END`, c.Branch, season, team)
 	if err != nil {
@@ -782,8 +834,7 @@ func (q *Queries) Coaches(ctx context.Context, c *Ctx, season, team int) ([]*Coa
 	var out []*Coach
 	for rows.Next() {
 		k := &Coach{}
-		if err := rows.Scan(&k.Row, &k.First, &k.Last, &k.Position, &k.TeamID, &k.Age, &k.Asset, &k.W, &k.L, &k.SW, &k.SL, &k.BowlW, &k.BowlL, &k.Conf, &k.Natl,
-			&k.PlayoffW, &k.PlayoffL, &k.IsUser); err != nil {
+		if err := scanCoach(rows, k); err != nil {
 			return nil, err
 		}
 		out = append(out, k)

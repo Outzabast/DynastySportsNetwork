@@ -48,6 +48,49 @@ type Snapshot struct {
 	PositionChanges     []PositionChange     `json:"positionChanges"`
 	DepthCharts         []DepthChartSlot     `json:"depthCharts"`
 	Bowls               []Bowl               `json:"bowls"`
+	Conferences         []Conference         `json:"conferences"`
+	TeamHistory         []TeamHistoryYear    `json:"teamHistory"`
+}
+
+// Conference is one conference's structure this season. A conference with a
+// single division (or none) has no division split in its standings.
+type Conference struct {
+	Name      string     `json:"name"`
+	ChampGame string     `json:"champGame"` // "" when the conference plays no title game
+	Divisions []Division `json:"divisions"`
+}
+
+// Division is one division of a conference, in the game's listed order.
+type Division struct {
+	Name    string `json:"name"`
+	TeamIDs []int  `json:"teamIds"`
+}
+
+// TeamHistoryYear is the game's own season-by-season record for a team
+// (Team.TeamSeriesHistory). It reaches back before our first capture.
+type TeamHistoryYear struct {
+	TeamID       int                `json:"teamId"`
+	Year         int                `json:"year"` // calendar year
+	CoachName    string             `json:"coachName"`
+	Conference   string             `json:"conference"`
+	Division     string             `json:"division"`
+	Wins         int                `json:"wins"`
+	Losses       int                `json:"losses"`
+	Ties         int                `json:"ties"`
+	ConfWins     int                `json:"confWins"`
+	ConfLosses   int                `json:"confLosses"`
+	FinalRank    int                `json:"finalRank"`
+	ConfStanding int                `json:"confStanding"`
+	ConfChamp    bool               `json:"confChamp"`
+	Postseason   []PostseasonResult `json:"postseason"`
+}
+
+// PostseasonResult is one bowl or CFP game in a team's season history.
+type PostseasonResult struct {
+	Bowl    string `json:"bowl"`
+	Playoff bool   `json:"playoff"`
+	Round   string `json:"round"` // CFP round when Playoff
+	Won     bool   `json:"won"`
 }
 
 // Season is the save's position on the dynasty calendar.
@@ -59,6 +102,7 @@ type Season struct {
 	Week             int             `json:"week"`
 	WeekType         string          `json:"weekType"`
 	OffseasonStage   int             `json:"offseasonStage"`
+	ConfChampWeek    int             `json:"confChampWeek"`
 	Periods          map[string]bool `json:"periods"`
 }
 
@@ -73,6 +117,7 @@ type Team struct {
 	Abbrev          string `json:"abbrev"`
 	AssetName       string `json:"assetName"`
 	Conference      string `json:"conference"`
+	Division        string `json:"division"` // "" when the conference has no division split
 	PrimaryColor    string `json:"primaryColor"`
 	SecondaryColor  string `json:"secondaryColor"`
 	Wins            int    `json:"wins"`
@@ -148,6 +193,12 @@ type Coach struct {
 	SchoolWins   int    `json:"schoolWins"`
 	SchoolLosses int    `json:"schoolLosses"`
 	IsUser       bool   `json:"isUser"`
+
+	SeasonWins      int    `json:"seasonWins"`
+	SeasonLosses    int    `json:"seasonLosses"`
+	SeasonsWithTeam int    `json:"seasonsWithTeam"`
+	YearsCoaching   int    `json:"yearsCoaching"`
+	HomeState       string `json:"homeState"`
 }
 
 // Game is one SeasonGame row in the current season.
@@ -180,26 +231,29 @@ type Game struct {
 	WindSpeed    int    `json:"windSpeed"`
 	Stadium      string `json:"stadium"`
 	BowlName     string `json:"bowlName"`
-	GameOfWeek   bool   `json:"gameOfWeek"`
-	Rematch      bool   `json:"rematch"`
-	HomeBox      Stats  `json:"homeBox"`
-	AwayBox      Stats  `json:"awayBox"`
+	// GameType: conference, nonconference, conf_championship, bowl, playoff,
+	// national_championship (preseason/unscheduled games stay "").
+	GameType     string        `json:"gameType"`
+	GameOfWeek   bool          `json:"gameOfWeek"`
+	Rematch      bool          `json:"rematch"`
+	HomeBox      Stats         `json:"homeBox"`
+	AwayBox      Stats         `json:"awayBox"`
 	ScoringPlays []ScoringPlay `json:"scoringPlays"`
 }
 
 // ScoringPlay is one entry of a game's scoring summary. The game only keeps
 // these during the week the game is played, so they must be captured then.
 type ScoringPlay struct {
-	Seq          int       `json:"seq"`
-	Quarter      int       `json:"quarter"`
-	ClockSec     int       `json:"clockSec"`
-	HomeScore    int       `json:"homeScore"`
-	AwayScore    int       `json:"awayScore"`
-	HomePrev     int       `json:"homePrev"`
-	AwayPrev     int       `json:"awayPrev"`
-	Conversion   string    `json:"conversion"`
-	ScoringTeam  string    `json:"scoringTeam"` // "home" / "away"
-	Participants []Scorer  `json:"participants"`
+	Seq          int      `json:"seq"`
+	Quarter      int      `json:"quarter"`
+	ClockSec     int      `json:"clockSec"`
+	HomeScore    int      `json:"homeScore"`
+	AwayScore    int      `json:"awayScore"`
+	HomePrev     int      `json:"homePrev"`
+	AwayPrev     int      `json:"awayPrev"`
+	Conversion   string   `json:"conversion"`
+	ScoringTeam  string   `json:"scoringTeam"` // "home" / "away"
+	Participants []Scorer `json:"participants"`
 }
 
 // Scorer is a player snapshot attached to a scoring play.
@@ -244,21 +298,21 @@ type TeamSeasonStat struct {
 }
 
 type Recruit struct {
-	PlayerRow      int    `json:"playerRow"`
-	FirstName      string `json:"firstName"`
-	LastName       string `json:"lastName"`
-	Position       string `json:"position"`
-	HomeTown       string `json:"homeTown"`
-	HomeState      string `json:"homeState"`
-	Class          string `json:"class"`
-	Stars          int    `json:"stars"`
-	NationalRank   int    `json:"nationalRank"`
-	PositionRank   int    `json:"positionRank"`
-	StateRank      int    `json:"stateRank"`
-	Stage          string `json:"stage"`
-	CommittedTeam  int    `json:"committedTeam"`
-	Height         int    `json:"height"`
-	Weight         int    `json:"weight"`
+	PlayerRow     int    `json:"playerRow"`
+	FirstName     string `json:"firstName"`
+	LastName      string `json:"lastName"`
+	Position      string `json:"position"`
+	HomeTown      string `json:"homeTown"`
+	HomeState     string `json:"homeState"`
+	Class         string `json:"class"`
+	Stars         int    `json:"stars"`
+	NationalRank  int    `json:"nationalRank"`
+	PositionRank  int    `json:"positionRank"`
+	StateRank     int    `json:"stateRank"`
+	Stage         string `json:"stage"`
+	CommittedTeam int    `json:"committedTeam"`
+	Height        int    `json:"height"`
+	Weight        int    `json:"weight"`
 }
 
 type PlayerAward struct {
@@ -282,15 +336,15 @@ type LeagueAward struct {
 }
 
 type ConferenceChampion struct {
-	Row          int    `json:"row"`
-	Conference   string `json:"conference"`
-	Winner       string `json:"winner"`
-	Loser        string `json:"loser"`
-	WinnerScore  int    `json:"winnerScore"`
-	LoserScore   int    `json:"loserScore"`
-	WinnerRank   int    `json:"winnerRank"`
-	LoserRank    int    `json:"loserRank"`
-	CoachName    string `json:"coachName"`
+	Row         int    `json:"row"`
+	Conference  string `json:"conference"`
+	Winner      string `json:"winner"`
+	Loser       string `json:"loser"`
+	WinnerScore int    `json:"winnerScore"`
+	LoserScore  int    `json:"loserScore"`
+	WinnerRank  int    `json:"winnerRank"`
+	LoserRank   int    `json:"loserRank"`
+	CoachName   string `json:"coachName"`
 }
 
 type RecordBookEntry struct {

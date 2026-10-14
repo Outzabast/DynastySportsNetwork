@@ -1,0 +1,66 @@
+{{define "title"}}{{.K.Name}}{{end}}
+{{define "content"}}
+{{$k := .K}}{{$cur := .Current}}{{$teams := .Teams}}
+<div class="clubwrap">
+  <div class="hero-band" style="background: {{if $cur}}{{color $cur.Color}}{{else}}#48494a{{end}}"></div>
+  <div class="player-head">
+    <img class="hs" src="{{coachPortrait $k.Asset}}" alt="">
+    <div style="padding-bottom:16px">
+      <h1>{{$k.First}} <b>{{$k.Last}}</b></h1>
+      <div class="sub">
+        {{if $cur}}{{template "teamlogo" $cur}}<a href="{{teamURL $cur}}">{{$cur.Long}} {{$cur.Nick}}</a> · {{posLabel $k.Position}}
+        {{else}}<span class="pill">Not on a staff this season</span>{{end}}
+      </div>
+    </div>
+  </div>
+  <dl class="bio">
+    {{if $cur}}<div><dt>Tenure</dt><dd>Year {{inc $k.SeasonsWithTeam}} at {{$cur.Name}}</dd></div>{{end}}
+    {{if $k.YearsCoaching}}<div><dt>Experience</dt><dd>{{$k.YearsCoaching}} years coaching</dd></div>{{end}}
+    {{if $k.Age}}<div><dt>Age</dt><dd>{{$k.Age}}</dd></div>{{end}}
+    {{with $k.HomeState}}<div><dt>Home State</dt><dd>{{pretty .}}</dd></div>{{end}}
+    <div><dt>Schools</dt><dd>{{.Schools}}</dd></div>
+  </dl>
+</div>
+
+<div class="kpis">
+  <div class="kpi"><span>Head Coach Record</span><b>{{.HCW}}-{{.HCL}}</b><small>{{.Seasons}} seasons tracked</small></div>
+  <div class="kpi"><span>Bowl Record</span><b>{{.BowlW}}-{{.BowlL}}</b></div>
+  <div class="kpi"><span>Playoff Record</span><b>{{.CFPW}}-{{.CFPL}}</b></div>
+  <div class="kpi"><span>Conference Titles</span><b>{{.ConfTitles}}</b></div>
+</div>
+
+<div class="card">
+  <h2>Coaching History</h2>
+  <div class="tbl-wrap"><table class="tbl">
+    <thead><tr><th class="l">Year</th><th class="l">School</th><th class="l">Role</th><th>Record</th><th>Conf</th><th title="Final AP rank">Rank</th><th class="l">Postseason</th></tr></thead>
+    <tbody>{{range .Stints}}{{$t := .Team}}
+      <tr>
+        <td class="l"><b>{{.Year}}</b></td>
+        <td class="l"><span class="tm">{{template "teamlogo" $t}}<a href="/team/{{.TeamID}}?season={{.Year}}">{{$t.Name}}</a></span></td>
+        <td class="l">{{posLabel .Position}}{{if not .Captured}} <span class="muted small" title="From the game's own season history">·&nbsp;history</span>{{end}}</td>
+        {{with .History}}
+        <td>{{.Record}}</td><td>{{.ConfRecord}}</td><td>{{if and .FinalRank (le .FinalRank 25)}}#{{.FinalRank}}{{else}}-{{end}}</td>
+        <td class="l">{{if .ConfChamp}}<span class="gtag cc">{{.Conference}} Champions</span> {{end}}{{range .Postseason}}<span class="gtag {{if .Playoff}}cfp{{else}}bowl{{end}}">{{if .Playoff}}{{.Round}}{{else}}{{.Bowl}}{{end}} {{if .Won}}W{{else}}L{{end}}</span> {{end}}</td>
+        {{else}}<td>-</td><td>-</td><td>-</td><td></td>{{end}}
+      </tr>
+    {{end}}</tbody>
+  </table></div>
+</div>
+
+{{range .Logs}}{{$log := .}}
+<div class="card">
+  <h2><span class="tm">{{template "teamlogo" .Team}}{{.Year}} {{.Team.Name}} · {{posLabel .Position}}</span><span class="muted small">{{.W}}-{{.L}}</span></h2>
+  <div class="tbl-wrap"><table class="tbl">
+    <thead><tr><th class="l">Date</th><th class="l">Opponent</th><th class="l">Game</th><th class="l">Result</th></tr></thead>
+    <tbody>{{range .Games}}{{$g := .Card.G}}{{$home := eq $g.Home .Team}}{{$opp := .Card.Away}}{{if not $home}}{{$opp = .Card.Home}}{{end}}
+      <tr><td class="l">{{dateLabel $g .Card.Year}}<div class="muted small">{{weekShort $g.WeekType $g.Week}}</div></td>
+        <td class="l"><span class="tm">{{if $home}}vs{{else}}@{{end}} {{template "teamlogo" $opp}}{{if teamURL $opp}}<a href="{{teamURL $opp}}">{{$opp.Name}}</a>{{else}}{{$opp.Name}}{{end}}</span></td>
+        <td class="l small">{{template "gametag" .Card}}</td>
+        <td class="l">{{if $g.Played}}<a class="{{if .Won}}win{{else}}loss{{end}}" href="/game/{{.Card.Year}}/{{$g.Row}}">{{if .Won}}W{{else}}L{{end}} {{if $home}}{{$g.HomeScore}}-{{$g.AwayScore}}{{else}}{{$g.AwayScore}}-{{$g.HomeScore}}{{end}}</a>{{else}}<span class="muted">{{status $g}}</span>{{end}}</td></tr>
+    {{end}}</tbody>
+  </table></div>
+</div>
+{{else}}
+<div class="card card-b muted">No games captured for this coach yet. Game logs start with the first season the site recorded.</div>
+{{end}}
+{{end}}

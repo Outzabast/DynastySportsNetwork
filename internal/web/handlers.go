@@ -84,6 +84,7 @@ func (s *Site) page(f pageFunc) http.HandlerFunc {
 		d["C"] = c
 		d["Ticker"] = s.ticker(r.Context(), c)
 		d["Path"] = r.URL.Path
+		d["CanEdit"] = canEdit(r)
 		s.render(w, http.StatusOK, name, d)
 	}
 }
@@ -140,6 +141,34 @@ type GameCard struct {
 	Home     *store.Team
 	Leaders  []string
 	Year     int
+}
+
+// Tag names the kind of game for scoreboards and schedules.
+func (gc *GameCard) Tag() string {
+	switch gc.G.Kind() {
+	case "conference":
+		return "Conference"
+	case "nonconference":
+		return "Non-Conference"
+	case "conf_championship":
+		if gc.Home != nil && gc.Home.Conference != "" {
+			return gc.Home.Conference + " Championship"
+		}
+		return "Conference Championship"
+	case "bowl":
+		return "Bowl Game"
+	case "playoff":
+		return "College Football Playoff"
+	case "national_championship":
+		return "CFP National Championship"
+	}
+	return ""
+}
+
+// Featured marks title games, bowls and playoff games for a banner.
+func (gc *GameCard) Featured() bool {
+	k := gc.G.Kind()
+	return k == "conf_championship" || gc.G.Postseason()
 }
 
 func (s *Site) cards(ctx context.Context, c *store.Ctx, season int, games []*store.Game, leaders bool) ([]*GameCard, error) {
@@ -315,8 +344,12 @@ func (s *Site) home(r *http.Request, c *store.Ctx) (string, data, error) {
 	for _, id := range []string{"passyds", "rushyds", "recyds", "sacks", "ints", "tackles"} {
 		leaders = append(leaders, s.leaderBoard(id, lines, teams, 5))
 	}
+	stories, err := s.q.Articles(ctx, c, store.ArticleFilter{Team: -1, Season: -1, Limit: 8})
+	if err != nil {
+		return "", nil, err
+	}
 	return "home", data{"Featured": featured, "Upcoming": upcoming, "Results": results, "Top25": top25, "Teams": teams,
-		"Leaders": leaders, "WeekLabel": weekLabel(wt, wk)}, nil
+		"Leaders": leaders, "WeekLabel": weekLabel(wt, wk), "Stories": s.storyCards(teams, stories)}, nil
 }
 
 func rankedTeams(teams map[int]*store.Team, poll string) []*store.Team {
@@ -495,7 +528,11 @@ func (s *Site) game(r *http.Request, c *store.Ctx) (string, data, error) {
 		}
 		boxCats = append(boxCats, BoxCategory{Name: t.Name, Away: a, Home: h})
 	}
-	return "game", data{"G": g, "Away": away, "Home": home, "Box": boxCats,
+	recaps, err := s.q.Articles(r.Context(), c, store.ArticleFilter{Team: -1, Season: season, Game: row, Drafts: canEdit(r), Limit: 5})
+	if err != nil {
+		return "", nil, err
+	}
+	return "game", data{"G": g, "Away": away, "Home": home, "Box": boxCats, "Recaps": s.storyCards(teams, recaps),
 		"TeamStats": teamBoxRows(g.AwayBox, g.HomeBox), "Scoring": scoringLines(g, plays, lines), "HasScoring": len(plays) > 0,
 		"Season": season, "Year": c.YearOf(season), "Quarters": quarterCols(g)}, nil
 }
@@ -605,9 +642,18 @@ func scoringLines(g *store.Game, plays []*store.ScoringPlay, lines []*store.Line
 }
 
 // Standing is a conference standings table.
+// Standing is one conference table. Split conferences have one Division
+// per division; the rest have a single unnamed Division.
 type Standing struct {
 	Conference string
-	Teams      []*store.Team
+	Divisions  []DivisionStanding
+	Teams      []*store.Team // every team, conference order (API)
+}
+
+// DivisionStanding is one division's rows ("" name = no split).
+type DivisionStanding struct {
+	Name  string
+	Teams []*store.Team
 }
 
 func (s *Site) standingsData(ctx context.Context, c *store.Ctx, season int) ([]Standing, error) {
@@ -633,7 +679,19 @@ func (s *Site) standingsData(ctx context.Context, c *store.Ctx, season int) ([]S
 			}
 			return a.W > b.W
 		})
-		out = append(out, Standing{conf, ts})
+		st := Standing{Conference: conf, Teams: ts}
+		idx := map[string]int{}
+		for _, t := range ts {
+			i, ok := idx[t.Division]
+			if !ok {
+				i = len(st.Divisions)
+				idx[t.Division] = i
+				st.Divisions = append(st.Divisions, DivisionStanding{Name: t.Division})
+			}
+			st.Divisions[i].Teams = append(st.Divisions[i].Teams, t)
+		}
+		sort.SliceStable(st.Divisions, func(i, j int) bool { return st.Divisions[i].Name < st.Divisions[j].Name })
+		out = append(out, st)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Conference < out[j].Conference })
 	return out, nil
@@ -829,6 +887,10 @@ func (s *Site) team(r *http.Request, c *store.Ctx) (string, data, error) {
 	if err != nil {
 		return "", nil, err
 	}
+	news, err := s.q.Articles(ctx, c, store.ArticleFilter{Team: t.ID, Season: -1, Limit: 5})
+	if err != nil {
+		return "", nil, err
+	}
 	st, _ := s.standingsData(ctx, c, season)
 	var confTable *Standing
 	for i := range st {
@@ -837,7 +899,7 @@ func (s *Site) team(r *http.Request, c *store.Ctx) (string, data, error) {
 		}
 	}
 	return "team", data{"T": t, "Season": season, "Schedule": sched, "Leaders": leaders, "Coaches": coaches, "Injuries": inj,
-		"Rivalries": riv, "Teams": teams, "Recruits": recruits, "Conf": confTable, "Tab": "home"}, nil
+		"Rivalries": riv, "Teams": teams, "Recruits": recruits, "Conf": confTable, "Tab": "home", "Stories": s.storyCards(teams, news)}, nil
 }
 
 func (s *Site) teamRoster(r *http.Request, c *store.Ctx) (string, data, error) {

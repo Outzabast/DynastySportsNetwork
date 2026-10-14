@@ -4,6 +4,12 @@
 {{$t := .T}}{{$teams := .Teams}}
 <div class="grid g-2">
   <div>
+    {{with .Stories}}
+    <div class="card">
+      <h2>{{$t.Name}} News <a href="/news?team={{$t.ID}}">All stories</a></h2>
+      {{range .}}<a class="story-mini" href="{{.URL}}">{{if .Image}}<img src="{{.Image}}" alt="" loading="lazy">{{end}}<div><b>{{.Headline}}</b><div class="story-stamp">{{timeAgo .When}}{{with .Byline}} • {{.}}{{end}}</div></div></a>{{end}}
+    </div>
+    {{end}}
     {{with .Leaders}}
     <div class="card">
       <h2>Team Leaders <a href="/team/{{$t.ID}}/stats">Full stats</a></h2>
@@ -45,16 +51,17 @@
     <div class="card">
       <h2>{{.Conference}} Standings</h2>
       <table class="tbl"><thead><tr><th class="l">Team</th><th>Conf</th><th>Over</th></tr></thead>
-        <tbody>{{range .Teams}}<tr><td><span class="tm">{{template "teamlogo" .}}<a href="{{teamURL .}}" {{if eq .ID $t.ID}}style="font-weight:700"{{end}}>{{.Name}}</a></span></td><td>{{.ConfRecord}}</td><td>{{.Record}}</td></tr>{{end}}</tbody></table>
+        {{range .Divisions}}{{if .Name}}<tbody><tr><td colspan="3" class="div-h">{{.Name}}</td></tr></tbody>{{end}}
+        <tbody>{{range .Teams}}<tr><td><span class="tm">{{template "teamlogo" .}}<a href="{{teamURL .}}" {{if eq .ID $t.ID}}style="font-weight:700"{{end}}>{{.Name}}</a></span></td><td>{{.ConfRecord}}</td><td>{{.Record}}</td></tr>{{end}}</tbody>{{end}}</table>
     </div>
     {{end}}
 
     {{with .Coaches}}
     <div class="card">
-      <h2>Coaching Staff</h2>
+      <h2>Coaching Staff <a href="/team/{{$t.ID}}/history">History</a></h2>
       {{range .}}
       <div class="ldr"><img class="hs" src="{{coachPortrait .Asset}}" alt="" loading="lazy">
-        <div class="who"><b>{{.First}} {{.Last}}</b><div>{{pretty .Position}}{{if .Age}} · Age {{.Age}}{{end}}</div>
+        <div class="who"><a href="{{coachURL .Key}}"><b>{{.First}} {{.Last}}</b></a><div>{{posLabel .Position}}{{if .SeasonsWithTeam}} · Year {{inc .SeasonsWithTeam}} at school{{end}}{{if .YearsCoaching}} · {{.YearsCoaching}} yrs coaching{{end}}</div>
           <div>Career {{.W}}-{{.L}}{{if or .SW .SL}} · At school {{.SW}}-{{.SL}}{{end}}{{if or .BowlW .BowlL}} · Bowls {{.BowlW}}-{{.BowlL}}{{end}}{{if .Conf}} · {{.Conf}} conf titles{{end}}{{if .Natl}} · {{.Natl}} national titles{{end}}</div></div></div>
       {{end}}
     </div>

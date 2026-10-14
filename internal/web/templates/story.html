@@ -1,0 +1,54 @@
+{{define "title"}}{{.A.Headline}}{{end}}
+{{define "content"}}
+{{$a := .A}}
+{{with .Game}}{{$g := .G}}
+<div class="card story-strip">
+  <div class="ss-team {{if and $g.Played (not (winner $g false))}}lose{{end}}">
+    {{if logo .Away}}<img src="{{logo .Away}}" alt="">{{end}}
+    <div><div class="nm">{{with rankOf .Away}}<span class="rk">{{.}}</span>{{end}}{{if teamURL .Away}}<a href="{{teamURL .Away}}">{{.Away.Long}}</a>{{else}}{{.Away.Long}}{{end}}</div><div class="muted small">{{.Away.Record}}{{if .Away.Conference}}, {{.Away.ConfRecord}} {{.Away.Conference}}{{end}}</div></div>
+    {{if $g.Played}}<div class="sc">{{$g.AwayScore}}</div>{{end}}
+  </div>
+  <div class="ss-mid">
+    <div class="st">{{status $g}}</div>
+    {{if $g.Played}}
+    <table>
+      <tr><th></th>{{range $.Quarters}}<th>{{.}}</th>{{end}}<th>T</th></tr>
+      <tr><td>{{.Away.Short}}</td>{{range $i, $q := $.Quarters}}<td>{{if eq $q "OT"}}{{$g.AwayOT}}{{else}}{{q $g.AwayQ $i}}{{end}}</td>{{end}}<td><b>{{$g.AwayScore}}</b></td></tr>
+      <tr><td>{{.Home.Short}}</td>{{range $i, $q := $.Quarters}}<td>{{if eq $q "OT"}}{{$g.HomeOT}}{{else}}{{q $g.HomeQ $i}}{{end}}</td>{{end}}<td><b>{{$g.HomeScore}}</b></td></tr>
+    </table>
+    {{end}}
+    <a class="small" href="/game/{{.Year}}/{{$g.Row}}">Box Score »</a>
+  </div>
+  <div class="ss-team home {{if and $g.Played (not (winner $g true))}}lose{{end}}">
+    {{if $g.Played}}<div class="sc">{{$g.HomeScore}}</div>{{end}}
+    <div><div class="nm">{{with rankOf .Home}}<span class="rk">{{.}}</span>{{end}}{{if teamURL .Home}}<a href="{{teamURL .Home}}">{{.Home.Long}}</a>{{else}}{{.Home.Long}}{{end}}</div><div class="muted small">{{.Home.Record}}{{if .Home.Conference}}, {{.Home.ConfRecord}} {{.Home.Conference}}{{end}}</div></div>
+    {{if logo .Home}}<img src="{{logo .Home}}" alt="">{{end}}
+  </div>
+</div>
+{{end}}
+
+<div class="grid g-2">
+  <article class="card story">
+    {{if not $a.Published}}<div class="draft-bar">Draft · only visible on this machine</div>{{end}}
+    <h1 class="story-h">{{$a.Headline}}</h1>
+    {{with $a.Dek}}<p class="story-dek">{{.}}</p>{{end}}
+    {{if $a.Image}}<figure class="story-fig"><img src="{{$a.Image}}" alt="">{{with $a.ImageCaption}}<figcaption>{{.}}</figcaption>{{end}}</figure>{{end}}
+    <div class="story-dots"></div>
+    <div class="story-meta">
+      <div>{{with $a.Byline}}<div class="by">By {{.}}</div>{{end}}
+        <div class="muted small">{{if $a.PublishedAt}}{{if gt ($a.UpdatedAt.Sub $a.When).Minutes 5.0}}Updated: {{$a.UpdatedAt.Format "Jan 2, 2006, 3:04 pm"}}{{else}}{{$a.When.Format "Jan 2, 2006, 3:04 pm"}}{{end}}{{else}}Last edited {{$a.UpdatedAt.Format "Jan 2, 2006, 3:04 pm"}}{{end}}</div></div>
+      {{if $.CanEdit}}<a class="btn btn-ghost" href="/story/{{$a.ID}}/edit">Edit</a>{{end}}
+    </div>
+    <div class="story-body">{{.Body}}</div>
+    {{with .Tagged}}<div class="story-tags">{{range .}}<a class="pill" href="/news?team={{.ID}}"><span class="tm">{{template "teamlogo" .}}{{.Name}}</span></a>{{end}}</div>{{end}}
+  </article>
+  <aside>
+    {{with .More}}
+    <div class="card">
+      <h2>More Stories <a href="/news">All news</a></h2>
+      {{range .}}<a class="story-mini" href="{{.URL}}">{{if .Image}}<img src="{{.Image}}" alt="" loading="lazy">{{end}}<div><b>{{.Headline}}</b><div class="story-stamp">{{timeAgo .When}}{{with .Byline}} • {{.}}{{end}}</div></div></a>{{end}}
+    </div>
+    {{end}}
+  </aside>
+</div>
+{{end}}

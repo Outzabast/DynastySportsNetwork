@@ -13,7 +13,9 @@
 {{define "gamecard"}}
 <div class="sb">
   <div class="sb-top"><span class="{{if .G.Played}}live{{end}}">{{status .G}}</span><span>{{if not .G.Played}}{{.G.Network}}{{else}}{{weekShort .G.WeekType .G.Week}}{{end}}</span></div>
-  {{if .G.BowlName}}<div class="sb-bowl">{{with bowlLogo .G.BowlName}}<img src="{{.}}" alt="">{{end}}{{.G.BowlName}}</div>{{end}}
+  {{if .G.BowlName}}<div class="sb-bowl">{{with bowlLogo .G.BowlName}}<img src="{{.}}" alt="">{{end}}{{.G.BowlName}}{{if eq .G.Kind "playoff" "national_championship"}} <span class="gtag cfp">CFP</span>{{end}}</div>
+  {{else if eq .G.Kind "conf_championship"}}<div class="sb-bowl">{{with confLogo .Home.Conference}}<img src="{{.}}" alt="">{{end}}{{.Tag}}</div>
+  {{else if .Tag}}<div class="sb-kind">{{.Tag}}</div>{{end}}
   <div class="sb-team {{if and .G.Played (not (winner .G false))}}lose{{end}}">
     {{template "teamlogo" .Away}}
     <div class="nm">{{with rankOf .Away}}<span class="rk">{{.}}</span>{{end}} {{if teamURL .Away}}<a href="{{teamURL .Away}}">{{.Away.Name}}</a>{{else}}<a>{{.Away.Name}}</a>{{end}}<small>({{.Away.Record}}{{if .Away.Conference}}, {{.Away.ConfRecord}} {{.Away.Conference}}{{end}})</small></div>
@@ -67,6 +69,7 @@
     <a href="/team/{{.T.ID}}/schedule?season={{year .C .Season}}" class="{{if eq .Tab "schedule"}}on{{end}}">Schedule</a>
     <a href="/team/{{.T.ID}}/roster?season={{year .C .Season}}" class="{{if eq .Tab "roster"}}on{{end}}">Roster</a>
     <a href="/team/{{.T.ID}}/stats?season={{year .C .Season}}" class="{{if eq .Tab "stats"}}on{{end}}">Stats</a>
+    <a href="/team/{{.T.ID}}/history?season={{year .C .Season}}" class="{{if eq .Tab "history"}}on{{end}}">History</a>
     <a href="/recruiting?team={{.T.ID}}&season={{year .C .Season}}">Recruiting</a>
     <a href="/records?scope=team&name={{.T.Long}}">Records</a>
   </div>
@@ -82,3 +85,5 @@
   </select>
 </form>
 {{end}}
+
+{{define "gametag"}}{{$k := .G.Kind}}{{if eq $k "conference"}}<span class="gtag conf">Conference</span>{{else if eq $k "nonconference"}}<span class="gtag">Non-Conf</span>{{else if eq $k "conf_championship"}}<span class="gtag cc">{{.Tag}}</span>{{else if eq $k "bowl"}}<span class="gtag bowl">{{.G.BowlName}}</span>{{else if eq $k "playoff"}}<span class="gtag cfp">{{.G.BowlName}}</span>{{else if eq $k "national_championship"}}<span class="gtag cfp">National Championship</span>{{end}}{{end}}

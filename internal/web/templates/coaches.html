@@ -1,0 +1,17 @@
+{{define "title"}}Coaches{{end}}
+{{define "content"}}
+<h1 class="page-title">{{year .C .Season}} Coaching Staffs</h1>
+{{template "seasonpick" (dict "C" .C "Season" .Season "Keep" nil)}}
+<div class="card">
+  <div class="tbl-wrap"><table class="tbl">
+    <thead><tr><th class="l">School</th><th class="l">Head Coach</th><th>Record</th><th class="l">Offensive Coordinator</th><th class="l">Defensive Coordinator</th></tr></thead>
+    <tbody>{{range .Rows}}
+      <tr><td class="l"><span class="tm">{{template "teamlogo" .Team}}<a href="{{teamURL .Team}}">{{.Team.Name}}</a></span></td>
+        <td class="l">{{with .HeadCoach}}<a href="{{coachURL .Key}}">{{.First}} {{.Last}}</a><div class="muted small">Year {{inc .SeasonsWithTeam}} · {{.YearsCoaching}} yrs coaching</div>{{else}}<span class="muted">Vacant</span>{{end}}</td>
+        <td>{{.Team.Record}}</td>
+        <td class="l">{{with .OC}}<a href="{{coachURL .Key}}">{{.First}} {{.Last}}</a>{{else}}<span class="muted">-</span>{{end}}</td>
+        <td class="l">{{with .DC}}<a href="{{coachURL .Key}}">{{.First}} {{.Last}}</a>{{else}}<span class="muted">-</span>{{end}}</td></tr>
+    {{else}}<tr><td colspan="5" class="l muted">No coaching staffs recorded for this season. Staffs are captured from in-season saves.</td></tr>{{end}}</tbody>
+  </table></div>
+</div>
+{{end}}

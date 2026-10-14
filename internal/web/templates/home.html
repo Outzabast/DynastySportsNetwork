@@ -15,6 +15,13 @@
   </div>
 
   <div>
+    {{with .Stories}}{{$top := index . 0}}
+    <a class="card story-hero" href="{{$top.URL}}">
+      {{if $top.Image}}<img src="{{$top.Image}}" alt="">{{end}}
+      <div class="card-b"><div class="sh-h">{{$top.Headline}}</div>{{with $top.Dek}}<p>{{.}}</p>{{end}}
+        <div class="story-stamp">{{timeAgo $top.When}}{{with $top.Byline}} • {{.}}{{end}}</div></div>
+    </a>
+    {{end}}
     {{with .Featured}}
     <div class="card">
       <div class="hero-band" style="background: linear-gradient(90deg, {{color .Away.Color}} 50%, {{color .Home.Color}} 50%)"></div>
@@ -43,6 +50,12 @@
   </div>
 
   <div>
+    {{if gt (len .Stories) 1}}
+    <div class="card">
+      <h2>Top Headlines <a href="/news">All news</a></h2>
+      {{range $i, $s := .Stories}}{{if $i}}<a class="story-mini" href="{{$s.URL}}"><div><b>{{$s.Headline}}</b><div class="story-stamp">{{timeAgo $s.When}}{{with $s.Byline}} • {{.}}{{end}}</div></div></a>{{end}}{{end}}
+    </div>
+    {{end}}
     {{range .Leaders}}{{if .Entries}}
     <div class="card">
       <h2>{{.Name}} <a href="/stats">All leaders</a></h2>

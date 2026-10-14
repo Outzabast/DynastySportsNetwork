@@ -314,7 +314,7 @@ func (in *ingest) copyForward(ctx context.Context, from, to int, stored map[int]
 		}
 	}
 	prior := "season_index < $2"
-	for _, t := range []string{"team_season", "poll_week", "player_season", "player_season_stat", "coach_season", "recruit", "player_event"} {
+	for _, t := range []string{"team_season", "poll_week", "player_season", "player_season_stat", "coach_season", "recruit", "player_event", "conference_season"} {
 		if err := copyBranchRows(ctx, in.tx, t, from, to, prior, season); err != nil {
 			return err
 		}
@@ -325,7 +325,7 @@ func (in *ingest) copyForward(ctx context.Context, from, to int, stored map[int]
 			return err
 		}
 	}
-	for _, t := range []string{"award", "league_award", "conference_champion", "record_book", "rivalry"} {
+	for _, t := range []string{"award", "league_award", "conference_champion", "record_book", "rivalry", "team_history"} {
 		if err := copyBranchRows(ctx, in.tx, t, from, to, ""); err != nil {
 			return err
 		}
@@ -570,7 +570,7 @@ func (in *ingest) write(ctx context.Context) error {
 	}
 	for _, t := range snap.Teams {
 		teams = append(teams, []any{in.dynasty, t.ID, t.ShortName, t.LongName, t.DisplayName, t.NickName, t.Abbrev, t.AssetName, t.PrimaryColor, t.SecondaryColor})
-		tseason = append(tseason, []any{b, season, t.ID, t.Conference, t.Wins, t.Losses, t.ConfWins, t.ConfLosses, t.ConfStanding, t.Streak,
+		tseason = append(tseason, []any{b, season, t.ID, t.Conference, t.Division, t.Wins, t.Losses, t.ConfWins, t.ConfLosses, t.ConfStanding, t.Streak,
 			t.APRank, t.CoachesRank, t.CFPRank, t.OffensiveRank, t.DefensiveRank, t.RecruitingRank, t.PlayoffStatus, t.PlayoffRound, t.HeadCoachRow, js(tstats[t.ID]), sid})
 		for _, p := range []struct {
 			name                   string
@@ -585,7 +585,7 @@ func (in *ingest) write(ctx context.Context) error {
 		[]string{"dynasty_id", "team_id"}, teams); err != nil {
 		return err
 	}
-	if err := upsert(ctx, tx, "team_season", []string{"branch_id", "season_index", "team_id", "conference", "wins", "losses", "conf_wins", "conf_losses", "conf_standing", "streak",
+	if err := upsert(ctx, tx, "team_season", []string{"branch_id", "season_index", "team_id", "conference", "division", "wins", "losses", "conf_wins", "conf_losses", "conf_standing", "streak",
 		"ap_rank", "coaches_rank", "cfp_rank", "off_rank", "def_rank", "recruiting_rank", "playoff_status", "playoff_round", "head_coach_row", "stats", "snapshot_id"},
 		[]string{"branch_id", "season_index", "team_id"}, tseason); err != nil {
 		return err
@@ -620,7 +620,7 @@ func (in *ingest) write(ctx context.Context) error {
 		}
 		games = append(games, []any{b, g.SeasonIndex, g.Row, g.Week, g.WeekType, g.Status, g.Played, g.HomeTeamID, g.AwayTeamID, g.HomeScore, g.AwayScore,
 			i32s(g.HomeQuarters), i32s(g.AwayQuarters), g.HomeOT, g.AwayOT, g.Overtime, g.Simmed, g.Month, g.Day, g.DayOfWeek, g.TimeOfDay, g.Network,
-			g.Attendance, g.Temperature, g.Weather, g.Wind, g.WindSpeed, g.Stadium, g.BowlName, g.GameOfWeek, hb, ab, sid, sid})
+			g.Attendance, g.Temperature, g.Weather, g.Wind, g.WindSpeed, g.Stadium, g.BowlName, g.GameOfWeek, g.GameType, hb, ab, sid, sid})
 		for _, p := range g.ScoringPlays {
 			parts := []map[string]any{}
 			for _, sc := range p.Participants {
@@ -636,7 +636,7 @@ func (in *ingest) write(ctx context.Context) error {
 	}
 	if err := upsert(ctx, tx, "game", []string{"branch_id", "season_index", "game_row", "week", "week_type", "status", "played", "home_team", "away_team",
 		"home_score", "away_score", "home_quarters", "away_quarters", "home_ot", "away_ot", "overtime", "simmed", "month", "day", "day_of_week", "time_of_day",
-		"network", "attendance", "temperature", "weather", "wind", "wind_speed", "stadium", "bowl_name", "game_of_week", "home_box", "away_box",
+		"network", "attendance", "temperature", "weather", "wind", "wind_speed", "stadium", "bowl_name", "game_of_week", "game_type", "home_box", "away_box",
 		"first_snapshot", "last_snapshot"}, []string{"branch_id", "season_index", "game_row"}, games, "first_snapshot"); err != nil {
 		return err
 	}
@@ -683,15 +683,44 @@ func (in *ingest) write(ctx context.Context) error {
 		return err
 	}
 
-	// Coaches.
-	var coaches [][]any
-	for _, c := range snap.Coaches {
-		coaches = append(coaches, []any{b, season, c.Row, c.FirstName, c.LastName, c.Position, c.TeamID, c.Age, c.AssetName, c.Wins, c.Losses,
-			c.SchoolWins, c.SchoolLosses, c.BowlWins, c.BowlLosses, c.ConfTitles, c.NatlTitles, c.PlayoffWins, c.PlayoffLoss, c.IsUser, sid})
+	// Coaches. Staff changes happen in the offseason, but the save still
+	// calls it the finished season then; recording offseason staff would put
+	// new hires on last season's teams. So only in-season saves write staff.
+	if snap.Season.Stage != "OffSeason" {
+		var coaches [][]any
+		for _, c := range snap.Coaches {
+			coaches = append(coaches, []any{b, season, c.Row, CoachKey(c.FirstName, c.LastName, c.AssetName), c.FirstName, c.LastName, c.Position, c.TeamID, c.Age, c.AssetName,
+				c.Wins, c.Losses, c.SchoolWins, c.SchoolLosses, c.BowlWins, c.BowlLosses, c.ConfTitles, c.NatlTitles, c.PlayoffWins, c.PlayoffLoss, c.IsUser,
+				c.SeasonWins, c.SeasonLosses, c.SeasonsWithTeam, c.YearsCoaching, c.HomeState, sid})
+		}
+		if err := replaceWhere(ctx, tx, "coach_season", "branch_id = $1 AND season_index = $2", []any{b, season}, []string{"branch_id", "season_index", "coach_row", "coach_key",
+			"first_name", "last_name", "position", "team_id", "age", "asset_name",
+			"wins", "losses", "school_wins", "school_losses", "bowl_wins", "bowl_losses", "conf_titles", "natl_titles", "playoff_wins", "playoff_losses", "is_user",
+			"season_wins", "season_losses", "seasons_with_team", "years_coaching", "home_state", "snapshot_id"}, coaches); err != nil {
+			return err
+		}
 	}
-	if err := upsert(ctx, tx, "coach_season", []string{"branch_id", "season_index", "coach_row", "first_name", "last_name", "position", "team_id", "age", "asset_name",
-		"wins", "losses", "school_wins", "school_losses", "bowl_wins", "bowl_losses", "conf_titles", "natl_titles", "playoff_wins", "playoff_losses", "is_user", "snapshot_id"},
-		[]string{"branch_id", "season_index", "coach_row"}, coaches); err != nil {
+
+	// League structure and the game's own team history.
+	var confs [][]any
+	for _, c := range snap.Conferences {
+		confs = append(confs, []any{b, season, c.Name, c.ChampGame, js(c.Divisions), sid})
+	}
+	if err := replaceWhere(ctx, tx, "conference_season", "branch_id = $1 AND season_index = $2", []any{b, season},
+		[]string{"branch_id", "season_index", "name", "champ_game", "divisions", "snapshot_id"}, confs); err != nil {
+		return err
+	}
+	var hist [][]any
+	for _, h := range snap.TeamHistory {
+		post := h.Postseason
+		if post == nil {
+			post = []extract.PostseasonResult{}
+		}
+		hist = append(hist, []any{b, h.TeamID, h.Year, h.CoachName, h.Conference, h.Division, h.Wins, h.Losses, h.Ties, h.ConfWins, h.ConfLosses,
+			h.FinalRank, h.ConfStanding, h.ConfChamp, js(post), sid})
+	}
+	if err := upsert(ctx, tx, "team_history", []string{"branch_id", "team_id", "year", "coach_name", "conference", "division", "wins", "losses", "ties",
+		"conf_wins", "conf_losses", "final_rank", "conf_standing", "conf_champ", "postseason", "snapshot_id"}, []string{"branch_id", "team_id", "year"}, hist); err != nil {
 		return err
 	}
 

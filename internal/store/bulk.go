@@ -66,6 +66,20 @@ func replace(ctx context.Context, tx pgx.Tx, table string, branch int, cols []st
 	return nil
 }
 
+// replaceWhere swaps the rows matching where (args are $1..) for rows.
+func replaceWhere(ctx context.Context, tx pgx.Tx, table, where string, args []any, cols []string, rows [][]any) error {
+	if _, err := tx.Exec(ctx, fmt.Sprintf("DELETE FROM %s WHERE %s", table, where), args...); err != nil {
+		return err
+	}
+	if len(rows) == 0 {
+		return nil
+	}
+	if _, err := tx.CopyFrom(ctx, pgx.Identifier{table}, cols, pgx.CopyFromRows(rows)); err != nil {
+		return fmt.Errorf("%s copy: %w", table, err)
+	}
+	return nil
+}
+
 // tableColumns lists a table's columns in order.
 func tableColumns(ctx context.Context, tx pgx.Tx, table string) ([]string, error) {
 	rows, err := tx.Query(ctx, `SELECT column_name FROM information_schema.columns WHERE table_name = $1 ORDER BY ordinal_position`, table)

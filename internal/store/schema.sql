@@ -413,3 +413,67 @@ CREATE TABLE IF NOT EXISTS player_event (
 );
 
 INSERT INTO schema_version VALUES (1) ON CONFLICT DO NOTHING;
+
+-- v1.1: league structure, game types, coaching history, team history, articles.
+ALTER TABLE team_season ADD COLUMN IF NOT EXISTS division text NOT NULL DEFAULT '';
+ALTER TABLE game ADD COLUMN IF NOT EXISTS game_type text NOT NULL DEFAULT '';
+ALTER TABLE coach_season ADD COLUMN IF NOT EXISTS season_wins int NOT NULL DEFAULT 0;
+ALTER TABLE coach_season ADD COLUMN IF NOT EXISTS season_losses int NOT NULL DEFAULT 0;
+ALTER TABLE coach_season ADD COLUMN IF NOT EXISTS seasons_with_team int NOT NULL DEFAULT 0;
+ALTER TABLE coach_season ADD COLUMN IF NOT EXISTS years_coaching int NOT NULL DEFAULT 0;
+ALTER TABLE coach_season ADD COLUMN IF NOT EXISTS home_state text NOT NULL DEFAULT '';
+-- Coach identity: the game reuses Coach rows, so a coach is name + portrait asset.
+ALTER TABLE coach_season ADD COLUMN IF NOT EXISTS coach_key text NOT NULL DEFAULT '';
+CREATE INDEX IF NOT EXISTS coach_season_key ON coach_season(branch_id, coach_key);
+
+CREATE TABLE IF NOT EXISTS conference_season (
+    branch_id    int NOT NULL,
+    season_index int NOT NULL,
+    name         text NOT NULL,
+    champ_game   text NOT NULL,
+    divisions    jsonb NOT NULL,          -- [{name, teamIds}] in the game's order
+    snapshot_id  int NOT NULL,
+    PRIMARY KEY (branch_id, season_index, name)
+);
+
+-- The game's own season-by-season record per team (reaches before capture).
+CREATE TABLE IF NOT EXISTS team_history (
+    branch_id     int NOT NULL,
+    team_id       int NOT NULL,
+    year          int NOT NULL,           -- calendar year
+    coach_name    text NOT NULL,          -- as the game abbreviates it: "B. McWhorter"
+    conference    text NOT NULL,
+    division      text NOT NULL,
+    wins int NOT NULL, losses int NOT NULL, ties int NOT NULL,
+    conf_wins int NOT NULL, conf_losses int NOT NULL,
+    final_rank    int NOT NULL,
+    conf_standing int NOT NULL,
+    conf_champ    boolean NOT NULL,
+    postseason    jsonb NOT NULL,         -- [{bowl, playoff, round, won}]
+    snapshot_id   int NOT NULL,
+    PRIMARY KEY (branch_id, team_id, year)
+);
+
+-- Articles are written by hand and belong to the dynasty, not a branch, so a
+-- revert never hides them. Images live under media/articles, never here.
+CREATE TABLE IF NOT EXISTS article (
+    id            serial PRIMARY KEY,
+    dynasty_id    int NOT NULL REFERENCES dynasty(id),
+    slug          text NOT NULL,
+    headline      text NOT NULL,
+    dek           text NOT NULL DEFAULT '',
+    byline        text NOT NULL DEFAULT '',
+    body          text NOT NULL DEFAULT '',
+    image         text NOT NULL DEFAULT '',
+    image_caption text NOT NULL DEFAULT '',
+    season_index  int,
+    game_row      int,
+    team_ids      int[] NOT NULL DEFAULT '{}',
+    person_ids    uuid[] NOT NULL DEFAULT '{}',
+    published     boolean NOT NULL DEFAULT false,
+    published_at  timestamptz,
+    created_at    timestamptz NOT NULL DEFAULT now(),
+    updated_at    timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS article_dynasty ON article(dynasty_id, published, published_at DESC);
+CREATE INDEX IF NOT EXISTS article_game ON article(dynasty_id, season_index, game_row);

@@ -249,7 +249,9 @@ func (x *extractor) run(snap *Snapshot) error {
 	}
 	x.season(snap)
 	x.teams(snap)
+	x.conferences(snap)
 	x.games(snap)
+	x.teamHistory(snap)
 	x.playerStats(snap)
 	x.entities(snap)
 	x.playerRows(snap)
@@ -270,6 +272,7 @@ func (x *extractor) season(snap *Snapshot) {
 		Week:             intF(r, "CurrentWeek"),
 		WeekType:         strF(r, "CurrentWeekType"),
 		OffseasonStage:   intF(r, "CurrentOffseasonStage"),
+		ConfChampWeek:    intF(r, "RegularSeasonWeekConferenceChampionship"),
 		Periods:          map[string]bool{},
 	}
 	for k, v := range r.Fields {
@@ -320,8 +323,8 @@ func (x *extractor) teams(snap *Snapshot) {
 			Wins:           deref(e.OverallWins), Losses: deref(e.OverallLosses),
 			ConfWins: deref(e.ConferenceWins), ConfLosses: deref(e.ConferenceLosses),
 			ConfStanding: deref(e.ConferenceStanding), DivStanding: deref(e.DivisionStanding),
-			Streak:   deref(e.SeasonWinLossStreak),
-			APRank:   intF(r, "MediaPoll_CurrentRank"), APPoints: intF(r, "MediaPoll_CurrentPoints"),
+			Streak: deref(e.SeasonWinLossStreak),
+			APRank: intF(r, "MediaPoll_CurrentRank"), APPoints: intF(r, "MediaPoll_CurrentPoints"),
 			APFirstPlace: intF(r, "MediaPoll_FirstPlaceVotes"), APLastRank: intF(r, "MediaPoll_LastWeeksRank"),
 			CoachesRank: intF(r, "CoachesPoll_CurrentRank"), CoachesPoints: intF(r, "CoachesPoll_CurrentPoints"),
 			CoachesFirst: intF(r, "CoachesPoll_FirstPlaceVotes"), CoachesLastRank: intF(r, "CoachesPoll_LastWeeksRank"),
@@ -381,6 +384,10 @@ func (x *extractor) games(snap *Snapshot) {
 		expByRow[int(g.ID)] = g
 	}
 	snapT := x.table("OffensivePlayerStatSnapShot")
+	confOf := map[int]string{}
+	for _, t := range snap.Teams {
+		confOf[t.ID] = t.Conference
+	}
 	for _, r := range sg.Records {
 		home, away := x.teamIDFromRef(refF(r, "HomeTeam")), x.teamIDFromRef(refF(r, "AwayTeam"))
 		if refF(r, "HomeTeam") == nil && refF(r, "AwayTeam") == nil {
@@ -403,6 +410,11 @@ func (x *extractor) games(snap *Snapshot) {
 		if refF(r, "BowlGame") == nil && g.WeekType == "RegularSeason" {
 			g.BowlName = ""
 		}
+		bowl, playoff, hasBowl := x.bowlInfo(refF(r, "BowlGame"))
+		if hasBowl && bowl != "" {
+			g.BowlName = bowl
+		}
+		g.GameType = gameType(g.WeekType, g.Week, snap.Season.ConfChampWeek, home, away, confOf, g.BowlName, hasBowl && bowl != "", playoff)
 		for q := 1; q <= 4; q++ {
 			g.HomeQuarters = append(g.HomeQuarters, intF(r, fmt.Sprintf("HomeScoreQuarter%d", q)))
 			g.AwayQuarters = append(g.AwayQuarters, intF(r, fmt.Sprintf("AwayScoreQuarter%d", q)))
@@ -609,6 +621,11 @@ func (x *extractor) entities(snap *Snapshot) {
 	}
 	// Coaches: real-world facts only.
 	for _, c := range e.Coaches {
+		// The Coach table carries ~135 unused filler slots (age 0, first name
+		// == last name, no team, so the team ref reads as 0 = Air Force).
+		if deref(c.Age) == 0 && c.FirstName == c.LastName {
+			continue
+		}
 		co := Coach{Row: c.ID, FirstName: c.FirstName, LastName: c.LastName, Position: c.Position,
 			TeamID: derefOr(c.TeamID, -1), Age: deref(c.Age), IsUser: c.IsUserControlled}
 		if c.Career != nil {
@@ -623,7 +640,15 @@ func (x *extractor) entities(snap *Snapshot) {
 	if ct := x.table("Coach"); ct != nil {
 		for i := range snap.Coaches {
 			if r, ok := x.row(ct, snap.Coaches[i].Row); ok {
-				snap.Coaches[i].AssetName = strF(r, "AssetName")
+				c := &snap.Coaches[i]
+				c.AssetName = strF(r, "AssetName")
+				c.SeasonsWithTeam, c.YearsCoaching = intF(r, "SeasonsWithTeam"), intF(r, "YearsCoaching")
+				c.HomeState = strF(r, "HomeState")
+				if ref := refF(r, "SeasonStats"); ref != nil {
+					if st, ok := x.f.RecordByReference("SeasonCoachStats", ref); ok {
+						c.SeasonWins, c.SeasonLosses = intF(st, "Wins"), intF(st, "Losses")
+					}
+				}
 			}
 		}
 	}

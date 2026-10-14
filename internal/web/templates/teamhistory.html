@@ -1,0 +1,31 @@
+{{define "title"}}{{.T.Long}} History{{end}}
+{{define "content"}}
+{{template "teamhead" .}}
+{{$t := .T}}
+<div class="kpis">
+  <div class="kpi"><span>Record</span><b>{{.W}}-{{.L}}</b><small>{{len .Rows}} seasons</small></div>
+  <div class="kpi"><span>Bowl Record</span><b>{{.BowlW}}-{{.BowlL}}</b></div>
+  <div class="kpi"><span>Playoff Record</span><b>{{.CFPW}}-{{.CFPL}}</b></div>
+  <div class="kpi"><span>Conference Titles</span><b>{{.Titles}}</b></div>
+  <div class="kpi"><span>Ranked Finishes</span><b>{{.Ranked}}</b></div>
+</div>
+<div class="card">
+  <h2>Season by Season</h2>
+  <div class="tbl-wrap"><table class="tbl">
+    <thead><tr><th class="l">Year</th><th class="l">Head Coach</th><th class="l">Coordinators</th><th class="l">Conference</th><th>Record</th><th>Conf</th><th title="Final AP rank">Rank</th><th class="l">Postseason</th><th class="l"></th></tr></thead>
+    <tbody>{{range .Rows}}
+      <tr>
+        <td class="l"><b>{{.Year}}</b></td>
+        <td class="l">{{with .HeadCoach}}<a href="{{coachURL .Key}}">{{.First}} {{.Last}}</a>{{else}}{{.CoachName}}{{end}}</td>
+        <td class="l small">{{with .OC}}<div>OC <a href="{{coachURL .Key}}">{{.First}} {{.Last}}</a></div>{{end}}{{with .DC}}<div>DC <a href="{{coachURL .Key}}">{{.First}} {{.Last}}</a></div>{{end}}{{if not (or .OC .DC)}}<span class="muted">-</span>{{end}}</td>
+        <td class="l">{{.Conference}}{{with .Division}} <span class="muted small">{{.}}</span>{{end}}</td>
+        <td>{{.Record}}</td><td>{{.ConfRecord}}</td>
+        <td>{{if and .FinalRank (le .FinalRank 25)}}#{{.FinalRank}}{{else}}-{{end}}</td>
+        <td class="l">{{if .ConfChamp}}<span class="gtag cc">{{.Conference}} Champions</span> {{end}}{{range .Postseason}}<span class="gtag {{if .Playoff}}cfp{{else}}bowl{{end}}">{{if .Playoff}}{{.Round}}{{if ne .Bowl .Round}} · {{.Bowl}}{{end}}{{else}}{{.Bowl}}{{end}} {{if .Won}}W{{else}}L{{end}}</span> {{end}}</td>
+        <td class="l small">{{if .Captured}}<a href="/team/{{$t.ID}}/schedule?season={{.Year}}">Schedule</a> · <a href="/team/{{$t.ID}}/stats?season={{.Year}}">Stats</a> · <a href="/team/{{$t.ID}}/roster?season={{.Year}}">Roster</a>{{else}}<a href="/team/{{$t.ID}}/stats?season={{.Year}}">Stats</a>{{end}}</td>
+      </tr>
+    {{else}}<tr><td colspan="9" class="l muted">No season history yet.</td></tr>{{end}}</tbody>
+  </table></div>
+  <div class="card-f muted">Seasons before the site's first capture come from the game's own season history, which names the head coach only. Box scores and full staffs start with the first captured season.</div>
+</div>
+{{end}}

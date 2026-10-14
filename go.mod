@@ -6,6 +6,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.7.5
 	github.com/leaguelines/cfb-dynasty v0.3.1-0.20260731033729-9905effe3665
+	github.com/yuin/goldmark v1.7.8
 )
 
 require (

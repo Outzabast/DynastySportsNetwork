@@ -37,6 +37,14 @@
   </div>
 </div>
 
+{{range .Recaps}}
+<a class="card story-row" href="{{.URL}}">
+  {{if .Image}}<img src="{{.Image}}" alt="" loading="lazy">{{end}}
+  <div><div class="muted small" style="font-weight:700;text-transform:uppercase">{{if .Published}}Recap{{else}}Draft recap{{end}}</div><div class="sr-h">{{.Headline}}</div>{{with .Dek}}<p>{{.}}</p>{{end}}<div class="story-stamp">{{timeAgo .When}}{{with .Byline}} • {{.}}{{end}}</div></div>
+</a>
+{{end}}
+{{if and .CanEdit (not .Recaps)}}<p><a class="btn btn-ghost" href="/write?game={{.Year}}/{{$g.Row}}">Write a recap</a></p>{{end}}
+
 {{if $g.Played}}
 <div class="grid g-2">
   <div>

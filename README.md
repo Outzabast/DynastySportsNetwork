@@ -86,6 +86,17 @@ Notes:
 - The database is about 0.5 GB with four dynasties, so check your provider's
   storage limit.
 
+## Writing stories
+
+Open `/write` (or "Write a recap" on a box score) to write a story in
+Markdown. Tag teams to put it on their pages, and link a game to show it as a
+recap there. Leave **Published** unchecked to keep a draft. Editing works only
+from a browser on the machine running the server; set `DSN_EDIT_ANYWHERE=1` to
+allow it from other machines on a trusted network.
+
+Story text lives in the database. Uploaded images are saved under
+`media/articles`, so commit that folder to see them on other machines.
+
 ## Layout
 
 ```

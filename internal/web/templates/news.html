@@ -1,0 +1,29 @@
+{{define "title"}}{{with .Team}}{{.Name}} {{end}}News{{end}}
+{{define "content"}}
+<div class="news-head">
+  <h1 class="page-title">{{with .Team}}{{template "teamlogo" .}} {{.Long}} {{end}}News</h1>
+  {{if .CanEdit}}<a class="btn" href="/write">Write a story</a>{{end}}
+</div>
+<div class="grid g-2">
+  <div>
+  {{range $i, $s := .Stories}}
+    {{if and (eq $i 0) $s.Image}}
+    <a class="card story-hero" href="{{$s.URL}}">
+      <img src="{{$s.Image}}" alt="">
+      <div class="card-b"><div class="sh-h">{{$s.Headline}}</div>{{with $s.Dek}}<p>{{.}}</p>{{end}}
+        <div class="story-stamp">{{if not $s.Published}}<span class="gtag">Draft</span> {{end}}{{timeAgo $s.When}}{{with $s.Byline}} • {{.}}{{end}}</div></div>
+    </a>
+    {{else}}
+    <a class="card story-row" href="{{$s.URL}}">
+      {{if $s.Image}}<img src="{{$s.Image}}" alt="" loading="lazy">{{end}}
+      <div><div class="sr-h">{{$s.Headline}}</div>{{with $s.Dek}}<p>{{.}}</p>{{end}}
+        <div class="story-stamp">{{if not $s.Published}}<span class="gtag">Draft</span> {{end}}{{timeAgo $s.When}}{{with $s.Byline}} • {{.}}{{end}}{{range $s.Teams}} · {{.Name}}{{end}}</div></div>
+    </a>
+    {{end}}
+  {{else}}
+    <div class="card card-b muted">No stories yet.{{if .CanEdit}} <a href="/write">Write the first one.</a>{{end}}</div>
+  {{end}}
+  </div>
+  <div></div>
+</div>
+{{end}}

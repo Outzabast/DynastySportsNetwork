@@ -1,0 +1,132 @@
+{{define "title"}}{{if .A.ID}}Edit Story{{else}}Write a Story{{end}}{{end}}
+{{define "content"}}
+{{$a := .A}}{{$tagged := .Tagged}}
+<h1 class="page-title">{{if $a.ID}}Edit Story{{else}}Write a Story{{end}}</h1>
+{{with .Error}}<div class="card card-b loss">{{.}}</div>{{end}}
+<form class="editor" method="post" action="{{if $a.ID}}/story/{{$a.ID}}/edit{{else}}/write{{end}}" id="story-form">
+  <div class="grid g-2">
+    <div>
+      <div class="card card-b">
+        <label>Headline<input name="headline" value="{{$a.Headline}}" required maxlength="200" placeholder="No. 9 Texas State rolls past TCU to clinch the Big 12 West"></label>
+        <label>Summary line <span class="muted">(the line under the headline on lists)</span><input name="dek" value="{{$a.Dek}}" maxlength="300"></label>
+        <label>Byline<input name="byline" id="byline" value="{{$a.Byline}}" maxlength="100" placeholder="Your name"></label>
+      </div>
+      <div class="card">
+        <div class="ed-tools">
+          <button type="button" data-wrap="**" title="Bold"><b>B</b></button>
+          <button type="button" data-wrap="_" title="Italic"><i>I</i></button>
+          <button type="button" data-line="## " title="Subheading">H</button>
+          <button type="button" data-line="> " title="Quote">“”</button>
+          <button type="button" data-line="- " title="List">•</button>
+          <button type="button" id="ed-link" title="Link">Link</button>
+          <label class="ed-file" title="Insert image">Image<input type="file" accept="image/*" id="ed-img"></label>
+          <span class="spacer"></span>
+          <button type="button" id="ed-preview">Preview</button>
+        </div>
+        <textarea name="body" id="body" rows="24" placeholder="Write in Markdown. Blank line between paragraphs. ## for a subheading, > for a quote, [text](/team/124) for a link.">{{$a.Body}}</textarea>
+        <div class="story-body ed-preview" id="preview" hidden></div>
+      </div>
+    </div>
+    <div>
+      <div class="card card-b">
+        <label class="check"><input type="checkbox" name="publish" value="1" {{if $a.Published}}checked{{end}}> Published</label>
+        <p class="muted small">Unpublished stories are drafts: only visible on this machine.</p>
+        <button class="btn" type="submit">Save</button>
+        {{if $a.ID}} <a class="btn btn-ghost" href="{{storyURL $a}}">View</a>{{end}}
+      </div>
+      <div class="card card-b">
+        <h3 class="ed-h">Lead image</h3>
+        <input type="hidden" name="image" id="image" value="{{$a.Image}}">
+        <img id="image-preview" class="ed-lead" src="{{$a.Image}}" alt="" {{if not $a.Image}}hidden{{end}}>
+        <label class="ed-file btn btn-ghost">Upload image<input type="file" accept="image/*" id="lead-file"></label>
+        <button type="button" class="btn btn-ghost" id="lead-clear" {{if not $a.Image}}hidden{{end}}>Remove</button>
+        <label>Caption<input name="image_caption" value="{{$a.ImageCaption}}" maxlength="300"></label>
+        <p class="muted small">Images are saved to media/articles. Commit that folder to see them on your other machines.</p>
+      </div>
+      <div class="card card-b">
+        <h3 class="ed-h">Game</h3>
+        <label>Recap of game <span class="muted">(paste a box score link)</span><input name="game" value="{{.GameRef}}" placeholder="/game/2034/865"></label>
+        <p class="muted small">A recap shows the score strip above the story and appears on the game's page.</p>
+      </div>
+      <div class="card card-b">
+        <h3 class="ed-h">Teams</h3>
+        <select name="team" multiple size="12" class="ed-teams">
+          {{range .Teams}}<option value="{{.ID}}" {{if index $tagged .ID}}selected{{end}}>{{.Name}}</option>{{end}}
+        </select>
+        <p class="muted small">Ctrl-click to pick several. Tagged stories appear on team pages.</p>
+      </div>
+    </div>
+  </div>
+</form>
+
+{{if $a.ID}}
+<form class="card card-b ed-danger" method="post" action="/story/{{$a.ID}}/delete">
+  <b>Delete this story</b> <span class="muted small">This can't be undone. Type <code>delete</code> to confirm.</span>
+  <input name="confirm" autocomplete="off" size="8"> <button class="btn btn-ghost" type="submit">Delete</button>
+</form>
+{{end}}
+
+<script>
+(function () {
+  var body = document.getElementById('body');
+  var byline = document.getElementById('byline');
+  try { if (!byline.value) byline.value = localStorage.getItem('dsn-byline') || ''; } catch (e) {}
+  document.getElementById('story-form').addEventListener('submit', function () {
+    try { localStorage.setItem('dsn-byline', byline.value); } catch (e) {}
+  });
+  function insert(before, after) {
+    var s = body.selectionStart, e = body.selectionEnd, v = body.value;
+    body.value = v.slice(0, s) + before + v.slice(s, e) + (after || '') + v.slice(e);
+    body.focus();
+    body.selectionStart = s + before.length;
+    body.selectionEnd = e + before.length;
+  }
+  document.querySelectorAll('[data-wrap]').forEach(function (b) {
+    b.addEventListener('click', function () { insert(b.dataset.wrap, b.dataset.wrap); });
+  });
+  document.querySelectorAll('[data-line]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      var s = body.selectionStart, v = body.value, start = v.lastIndexOf('\n', s - 1) + 1;
+      body.value = v.slice(0, start) + b.dataset.line + v.slice(start);
+      body.focus();
+    });
+  });
+  document.getElementById('ed-link').addEventListener('click', function () {
+    var s = body.selectionStart, e = body.selectionEnd;
+    var text = body.value.slice(s, e) || 'link text';
+    body.value = body.value.slice(0, s) + '[' + text + '](/)' + body.value.slice(e);
+    body.focus();
+    body.selectionStart = body.selectionEnd = s + text.length + 3;
+  });
+  function upload(file, done) {
+    var fd = new FormData();
+    fd.append('file', file);
+    fetch('/write/upload', { method: 'POST', body: fd }).then(function (r) {
+      if (!r.ok) return r.text().then(function (t) { throw new Error(t); });
+      return r.json();
+    }).then(function (j) { done(j.url); }).catch(function (err) { alert('Upload failed: ' + err.message); });
+  }
+  document.getElementById('ed-img').addEventListener('change', function (ev) {
+    var f = ev.target.files[0];
+    if (f) upload(f, function (url) { insert('\n![](' + url + ')\n'); });
+    ev.target.value = '';
+  });
+  var image = document.getElementById('image'), prev = document.getElementById('image-preview'), clear = document.getElementById('lead-clear');
+  document.getElementById('lead-file').addEventListener('change', function (ev) {
+    var f = ev.target.files[0];
+    if (f) upload(f, function (url) { image.value = url; prev.src = url; prev.hidden = false; clear.hidden = false; });
+    ev.target.value = '';
+  });
+  clear.addEventListener('click', function () { image.value = ''; prev.hidden = true; clear.hidden = true; });
+  var pv = document.getElementById('preview'), pb = document.getElementById('ed-preview');
+  pb.addEventListener('click', function () {
+    if (!pv.hidden) { pv.hidden = true; body.hidden = false; pb.textContent = 'Preview'; return; }
+    var fd = new URLSearchParams();
+    fd.append('body', body.value);
+    fetch('/write/preview', { method: 'POST', body: fd }).then(function (r) { return r.text(); }).then(function (html) {
+      pv.innerHTML = html; pv.hidden = false; body.hidden = true; pb.textContent = 'Edit';
+    });
+  });
+})();
+</script>
+{{end}}

@@ -1,0 +1,21 @@
+{{define "title"}}{{.T.Long}} Schedule{{end}}
+{{define "content"}}
+{{template "teamhead" .}}
+{{$t := .T}}
+<form class="filters" method="get"><select name="season" onchange="this.form.submit()">
+  {{$sel := .Season}}{{$c := .C}}{{range .C.Seasons}}<option value="{{year $c .}}" {{if eq . $sel}}selected{{end}}>{{year $c .}}</option>{{end}}
+</select></form>
+<div class="card">
+  <h2>{{year .C .Season}} Schedule</h2>
+  <div class="tbl-wrap"><table class="tbl">
+    <thead><tr><th class="l">Date</th><th class="l">Opponent</th><th class="l">Result</th><th class="l">W-L (Conf)</th><th class="l">Top Performers</th></tr></thead>
+    <tbody>{{range .Schedule}}{{$home := eq .G.Home $t.ID}}{{$opp := .Away}}{{if not $home}}{{$opp = .Home}}{{end}}
+      <tr><td>{{dateLabel .G .Year}}<div class="muted small">{{weekShort .G.WeekType .G.Week}}</div></td>
+        <td class="l"><span class="tm">{{if $home}}vs{{else}}@{{end}} {{template "teamlogo" $opp}}{{with rankOf $opp}}<span class="rk">{{.}}</span>{{end}}{{if teamURL $opp}}<a href="{{teamURL $opp}}">{{$opp.Long}}</a>{{else}}{{$opp.Long}}{{end}}</span>{{with .G.BowlName}}<div class="muted small">{{.}}</div>{{end}}</td>
+        <td class="l">{{if .G.Played}}<a class="{{if isWin .G $t.ID}}win{{else}}loss{{end}}" href="/game/{{.Year}}/{{.G.Row}}">{{result .G $t.ID}}</a>{{else}}{{status .G}} <span class="muted small">{{.G.Network}}</span>{{end}}</td>
+        <td class="l muted">{{$opp.Record}} ({{$opp.ConfRecord}})</td>
+        <td class="l small">{{range .Leaders}}<div>{{.}}</div>{{end}}</td></tr>
+    {{end}}</tbody>
+  </table></div>
+</div>
+{{end}}

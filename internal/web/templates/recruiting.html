@@ -1,0 +1,21 @@
+{{define "title"}}Recruiting{{end}}
+{{define "content"}}
+<h1 class="page-title">{{year .C .Season}} Recruiting</h1>
+{{$teams := .Teams}}
+<div class="grid g-2">
+  <div class="card">
+    <h2>Top Prospects</h2>
+    <div class="tbl-wrap"><table class="tbl">
+      <thead><tr><th class="l">RK</th><th class="l">Name</th><th class="l">Pos</th><th class="l">Hometown</th><th class="l">HT/WT</th><th class="l">Rating</th><th class="l">Status</th></tr></thead>
+      <tbody>{{range .Recruits}}{{$t := team $teams .Committed}}
+        <tr><td>{{if .National}}{{.National}}{{else}}-{{end}}</td><td class="l"><a href="/player/{{.ID}}">{{.Name}}</a></td><td class="l">{{.Position}}</td><td class="l">{{.HomeTown}}, {{.HomeState}}</td><td class="l">{{height .Height}}, {{.Weight}}</td><td class="l stars">{{stars .Stars}}</td>
+          <td class="l">{{if ge .Committed 0}}<span class="tm">{{template "teamlogo" $t}}{{pretty .Stage}}</span>{{else}}<span class="muted">{{pretty .Stage}}</span>{{end}}</td></tr>
+      {{else}}<tr><td colspan="7" class="muted">No prospects recorded.</td></tr>{{end}}</tbody>
+    </table></div>
+  </div>
+  <div class="card">
+    <h2>Team Class Rankings</h2>
+    {{range .Classes}}<div class="rank-row"><span class="n">{{.RecruitRank}}</span>{{template "teamlogo" .}}<a class="t" href="/recruiting?team={{.ID}}&season={{year $.C $.Season}}">{{.Name}}</a></div>{{else}}<div class="card-b muted">Class rankings appear after the game evaluates classes.</div>{{end}}
+  </div>
+</div>
+{{end}}

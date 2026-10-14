@@ -1,0 +1,15 @@
+{{define "title"}}Teams{{end}}
+{{define "content"}}
+<h1 class="page-title">College Football Teams</h1>
+<div class="grid g-half">
+{{range .Standings}}
+  <div class="card">
+    <h2><span class="tm">{{with confLogo .Conference}}<img src="{{.}}" alt="">{{end}}{{.Conference}}</span></h2>
+    {{range .Teams}}
+    <div class="rank-row">{{template "teamlogo" .}}<a class="t" href="{{teamURL .}}">{{.Long}}</a>
+      <span class="small"><a href="/team/{{.ID}}/schedule">Schedule</a> · <a href="/team/{{.ID}}/roster">Roster</a> · <a href="/team/{{.ID}}/stats">Stats</a></span></div>
+    {{end}}
+  </div>
+{{end}}
+</div>
+{{end}}

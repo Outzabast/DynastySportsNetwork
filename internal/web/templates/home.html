@@ -1,0 +1,58 @@
+{{define "title"}}College Football{{end}}
+{{define "content"}}
+<div class="grid g-main">
+  <div class="col-left">
+    <div class="card">
+      <h2>AP Top 25 <a href="/rankings">Full rankings</a></h2>
+      {{range .Top25}}
+      <div class="rank-row">
+        <span class="n">{{.AP}}</span>{{template "teamlogo" .}}
+        <a class="t" href="{{teamURL .}}">{{.Name}}</a>
+        <span class="r">{{.Record}}</span>
+      </div>
+      {{else}}<div class="card-b muted">No poll yet this season.</div>{{end}}
+    </div>
+  </div>
+
+  <div>
+    {{with .Featured}}
+    <div class="card">
+      <div class="hero-band" style="background: linear-gradient(90deg, {{color .Away.Color}} 50%, {{color .Home.Color}} 50%)"></div>
+      <div class="card-h">{{if .G.Played}}Final{{else}}Game of the Week{{end}}<span class="muted small">{{dateLabel .G .Year}}</span></div>
+      <div class="feature">
+        <div>{{if logo .Away}}<img src="{{logo .Away}}" alt="">{{end}}<div class="t">{{with rankOf .Away}}<span class="rk">{{.}}</span> {{end}}<a href="{{teamURL .Away}}">{{.Away.Long}}</a></div><div class="muted small">{{.Away.Record}}</div></div>
+        <div>{{if .G.Played}}<div class="big">{{.G.AwayScore}} - {{.G.HomeScore}}</div>{{else}}<div class="vs">{{status .G}}</div><div class="muted small">{{.G.Network}}</div>{{end}}
+          {{if .G.BowlName}}<div class="small" style="margin-top:6px"><b>{{.G.BowlName}}</b></div>{{end}}
+          <div style="margin-top:10px"><a class="pill" href="/game/{{.Year}}/{{.G.Row}}">{{if .G.Played}}Box Score{{else}}Matchup{{end}}</a></div></div>
+        <div>{{if logo .Home}}<img src="{{logo .Home}}" alt="">{{end}}<div class="t">{{with rankOf .Home}}<span class="rk">{{.}}</span> {{end}}<a href="{{teamURL .Home}}">{{.Home.Long}}</a></div><div class="muted small">{{.Home.Record}}</div></div>
+      </div>
+      {{with .G.Stadium}}<div class="card-f muted">{{.}}</div>{{end}}
+    </div>
+    {{end}}
+
+    {{with .Results}}
+    <h3 class="day-h">Latest Results</h3>
+    <div class="sb-grid">{{range .}}{{template "gamecard" .}}{{end}}</div>
+    {{end}}
+
+    {{with .Upcoming}}
+    <h3 class="day-h">{{$.WeekLabel}} Matchups</h3>
+    <div class="sb-grid">{{range .}}{{template "gamecard" .}}{{end}}</div>
+    <p><a href="/scoreboard">Full scoreboard »</a></p>
+    {{end}}
+  </div>
+
+  <div>
+    {{range .Leaders}}{{if .Entries}}
+    <div class="card">
+      <h2>{{.Name}} <a href="/stats">All leaders</a></h2>
+      {{range .Entries}}
+      <div class="ldr"><span class="n">{{.Rank}}</span><img class="hs" src="{{portrait .Player.Portrait}}" alt="" loading="lazy">
+        <div class="who"><a href="/player/{{.Player.ID}}">{{.Player.Name}}</a><div>{{.Player.Position}} · {{.Team.Name}}</div></div>
+        <span class="val">{{.Value}}</span></div>
+      {{end}}
+    </div>
+    {{end}}{{end}}
+  </div>
+</div>
+{{end}}

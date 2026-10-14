@@ -1,0 +1,30 @@
+{{define "title"}}Rankings{{end}}
+{{define "content"}}
+<h1 class="page-title">{{year .C .Season}} College Football Rankings</h1>
+<form class="filters" method="get">
+  <select name="season" onchange="this.form.week.value=''; this.form.submit()">
+    {{$sel := .Season}}{{$c := .C}}{{range .C.Seasons}}<option value="{{year $c .}}" {{if eq . $sel}}selected{{end}}>{{year $c .}}</option>{{end}}
+  </select>
+  <select name="week" onchange="this.form.submit()">
+    {{$w := .Week}}{{range .Weeks}}<option value="{{.Week}}" {{if eq .Week $w.Week}}selected{{end}}>{{weekLabel .WeekType .Week}}</option>{{end}}
+  </select>
+</form>
+{{if not .Weeks}}<div class="note">Polls are recorded each time a save is captured, so rankings history builds up week by week from here on.</div>{{end}}
+<div class="grid g-half">
+{{$teams := .Teams}}
+{{range .Polls}}{{if .Entries}}
+  <div class="card">
+    <h2>{{.Name}}</h2>
+    <div class="tbl-wrap"><table class="tbl">
+      <thead><tr><th class="l">RK</th><th class="l">Team</th><th>Rec</th>{{if ne .ID "cfp"}}<th>PTS</th>{{end}}<th>Prev</th></tr></thead>
+      <tbody>{{$id := .ID}}{{range .Entries}}{{$t := team $teams .TeamID}}
+        <tr><td><b>{{.Rank}}</b></td><td class="l"><span class="tm">{{template "teamlogo" $t}}<a href="{{teamURL $t}}">{{$t.Name}}</a>{{if .FirstPlace}}<span class="sub">({{.FirstPlace}})</span>{{end}}</span></td>
+          <td>{{.W}}-{{.L}}</td>{{if ne $id "cfp"}}<td>{{.Points}}</td>{{end}}
+          <td>{{if and .PrevRank (le .PrevRank 25)}}{{.PrevRank}}{{if gt .PrevRank .Rank}} <span class="mv-up">▲{{sub .PrevRank .Rank}}</span>{{else if lt .PrevRank .Rank}} <span class="mv-dn">▼{{sub .Rank .PrevRank}}</span>{{end}}{{else}}NR{{end}}</td></tr>
+      {{end}}</tbody>
+    </table></div>
+    {{with .Others}}<div class="card-f" style="text-align:left"><b>Others receiving votes:</b> {{range $i, $e := .}}{{if $i}}, {{end}}{{(team $teams $e.TeamID).Name}} {{$e.Points}}{{end}}</div>{{end}}
+  </div>
+{{end}}{{end}}
+</div>
+{{end}}

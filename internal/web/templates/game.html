@@ -1,0 +1,83 @@
+{{define "title"}}{{.Away.Name}} vs. {{.Home.Name}} ({{.Year}}){{end}}
+{{define "content"}}
+{{$g := .G}}{{$away := .Away}}{{$home := .Home}}
+<div class="gh">
+  {{if $g.BowlName}}<div class="sb-bowl" style="justify-content:center;padding-top:12px;font-size:13px">{{with bowlLogo $g.BowlName}}<img src="{{.}}" alt="" style="height:28px">{{end}}{{$g.BowlName}}</div>{{end}}
+  <div class="gh-main">
+    <div class="gh-team {{if and $g.Played (not (winner $g false))}}lose{{end}}">
+      {{if logo $away}}<img src="{{logo $away}}" alt="">{{end}}
+      <div><div class="nm">{{with rankOf $away}}<span class="rk">{{.}}</span> {{end}}{{if teamURL $away}}<a href="{{teamURL $away}}">{{$away.Long}}</a>{{else}}{{$away.Long}}{{end}}</div>
+        <div class="rec">{{$away.Nick}} · {{$away.Record}}{{if $away.Conference}}, {{$away.ConfRecord}} {{$away.Conference}}{{end}}</div></div>
+      {{if $g.Played}}<div class="sc">{{$g.AwayScore}}</div>{{end}}
+    </div>
+    <div class="gh-mid">
+      <div class="st">{{status $g}}</div>
+      <div class="muted small">{{dateLabel $g .Year}}</div>
+      {{if $g.Played}}
+      <table>
+        <tr><th></th>{{range .Quarters}}<th>{{.}}</th>{{end}}<th>T</th></tr>
+        <tr><td>{{$away.Short}}</td>{{range $i, $q := .Quarters}}<td>{{if eq $q "OT"}}{{$g.AwayOT}}{{else}}{{q $g.AwayQ $i}}{{end}}</td>{{end}}<td><b>{{$g.AwayScore}}</b></td></tr>
+        <tr><td>{{$home.Short}}</td>{{range $i, $q := .Quarters}}<td>{{if eq $q "OT"}}{{$g.HomeOT}}{{else}}{{q $g.HomeQ $i}}{{end}}</td>{{end}}<td><b>{{$g.HomeScore}}</b></td></tr>
+      </table>
+      {{else}}<div class="muted small">{{$g.Network}}</div>{{end}}
+    </div>
+    <div class="gh-team home {{if and $g.Played (not (winner $g true))}}lose{{end}}">
+      {{if logo $home}}<img src="{{logo $home}}" alt="">{{end}}
+      <div><div class="nm">{{with rankOf $home}}<span class="rk">{{.}}</span> {{end}}{{if teamURL $home}}<a href="{{teamURL $home}}">{{$home.Long}}</a>{{else}}{{$home.Long}}{{end}}</div>
+        <div class="rec">{{$home.Nick}} · {{$home.Record}}{{if $home.Conference}}, {{$home.ConfRecord}} {{$home.Conference}}{{end}}</div></div>
+      {{if $g.Played}}<div class="sc">{{$g.HomeScore}}</div>{{end}}
+    </div>
+  </div>
+  <div class="gh-info">
+    {{with $g.Stadium}}<span>{{.}}</span>{{end}}
+    {{if $g.Attendance}}<span>Attendance: {{$g.Attendance}}</span>{{end}}
+    <span>{{$g.Temperature}}°F, {{pretty $g.Weather}}{{if $g.Wind}}, wind {{pretty $g.Wind}} ({{$g.WindSpeed}} mph){{end}}</span>
+    {{with $g.Network}}<span>Coverage: {{.}}</span>{{end}}
+    <span>{{weekLabel $g.WeekType $g.Week}}</span>
+  </div>
+</div>
+
+{{if $g.Played}}
+<div class="grid g-2">
+  <div>
+    <div class="card">
+      <h2>Scoring Summary</h2>
+      {{if .HasScoring}}
+        {{$lastQ := 0}}
+        <div class="score-play q-h"><span></span><span></span><span class="sc">{{$away.Short}}</span><span class="sc">{{$home.Short}}</span></div>
+        {{range .Scoring}}
+          {{if ne .Quarter $lastQ}}<div class="score-play q-h"><span></span><span>{{if gt .Quarter 4}}Overtime{{else}}Quarter {{.Quarter}}{{end}}</span><span></span><span></span></div>{{end}}
+          {{$lastQ = .Quarter}}
+          {{$t := $away}}{{if eq .TeamID $g.Home}}{{$t = $home}}{{end}}
+          <div class="score-play">
+            {{template "teamlogo" $t}}
+            <div><span class="ty">{{.Type}}</span> <span class="muted small">{{.Clock}}</span><div>{{.Description}}</div></div>
+            <span class="sc">{{.Away}}</span><span class="sc">{{.Home}}</span>
+          </div>
+        {{end}}
+      {{else}}
+        <div class="card-b muted small">The game keeps a scoring summary only during the week a game is played. This game was played before its week was captured, so only the final line score is available.</div>
+      {{end}}
+    </div>
+
+    <h2 class="page-title" style="font-size:20px">{{template "teamlogo" $away}} {{$away.Long}}</h2>
+    {{range .AwayBox}}{{template "stattable" .}}{{else}}<div class="card card-b muted">No individual stats recorded{{if lt $away.ID 0}} for FCS opponents{{end}}.</div>{{end}}
+    <h2 class="page-title" style="font-size:20px">{{template "teamlogo" $home}} {{$home.Long}}</h2>
+    {{range .HomeBox}}{{template "stattable" .}}{{else}}<div class="card card-b muted">No individual stats recorded{{if lt $home.ID 0}} for FCS opponents{{end}}.</div>{{end}}
+  </div>
+  <div>
+    {{with .TeamStats}}
+    <div class="card">
+      <h2>Team Stats</h2>
+      <table class="tbl cmp">
+        <thead><tr><th></th><th>{{$away.Short}}</th><th>{{$home.Short}}</th></tr></thead>
+        <tbody>{{range .}}<tr class="{{if .Indent}}ind{{end}}"><td>{{.Label}}</td><td>{{.Away}}</td><td>{{.Home}}</td></tr>{{end}}</tbody>
+      </table>
+    </div>
+    {{end}}
+  </div>
+</div>
+{{else}}
+<div class="card card-b">This game has not been played yet.</div>
+{{end}}
+{{end}}

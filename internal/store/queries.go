@@ -1,0 +1,1167 @@
+package store
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+)
+
+// Read side. Every query is scoped to the active branch of the dynasty with
+// the most recent save, so the site never shows superseded history.
+
+// Stats is a stat line keyed by the game's raw column names.
+type Stats map[string]int64
+
+// Add sums another line into s.
+func (s Stats) Add(o Stats) {
+	for k, v := range o {
+		switch k {
+		case "SEAS_YEAR", "YEARBYYEARTEAMINDEX", "STAT_KEEP":
+			s[k] = v
+		default:
+			if strings.HasSuffix(k, "LONGEST") || strings.HasSuffix(k, "LONGESTRETURN") {
+				if v > s[k] {
+					s[k] = v
+				}
+				continue
+			}
+			s[k] += v
+		}
+	}
+}
+
+// Group maps a raw stat category to the display group it belongs to. The
+// game splits a player's line across a base row and a kick/punt-return row;
+// they are disjoint and sum to the team totals.
+func Group(category string) string {
+	switch category {
+	case "offense", "returns_off":
+		return "offense"
+	case "defense", "returns_def":
+		return "defense"
+	}
+	return category
+}
+
+// Ctx is the site-wide context: which dynasty/branch/season is current.
+type Ctx struct {
+	Dynasty    int
+	Name       string // dynasty name, e.g. "Texas State"
+	LeagueID   int64
+	Branch     int
+	Season     int // season index
+	Year       int // calendar year of Season
+	BaseYear   int
+	Week       int
+	WeekType   string
+	Stage      string
+	SaveName   string
+	LastUpdate time.Time
+	Seasons    []int
+	Snapshots  int
+}
+
+// YearOf converts a season index to a calendar year.
+func (c *Ctx) YearOf(season int) int { return c.BaseYear + season }
+
+// Queries serves read models with a small cache. Everything is scoped to one
+// dynasty (and its active branch); dynasties never share rows.
+type Queries struct {
+	s     *Store
+	mu    sync.Mutex
+	ctx   map[int]*Ctx // by dynasty id (0 = most recently played)
+	at    map[int]time.Time
+	teams map[[2]int]map[int]*Team // (branch, season)
+}
+
+func NewQueries(s *Store) *Queries {
+	return &Queries{s: s, ctx: map[int]*Ctx{}, at: map[int]time.Time{}, teams: map[[2]int]map[int]*Team{}}
+}
+
+// Invalidate drops caches after an ingest.
+func (q *Queries) Invalidate() {
+	q.mu.Lock()
+	q.ctx = map[int]*Ctx{}
+	q.at = map[int]time.Time{}
+	q.teams = map[[2]int]map[int]*Team{}
+	q.mu.Unlock()
+}
+
+// ErrNoData means nothing has been ingested yet.
+var ErrNoData = errors.New("no dynasty data ingested yet")
+
+// Dynasty is one dynasty (save lineage) for the switcher.
+type Dynasty struct {
+	ID         int
+	LeagueID   int64
+	Name       string
+	UserTeamID int
+	Coach      string
+	SaveName   string
+	LastSave   *time.Time
+	Year       int
+	Snapshots  int
+}
+
+// Dynasties lists every dynasty, most recently played first.
+func (q *Queries) Dynasties(ctx context.Context) ([]*Dynasty, error) {
+	rows, err := q.s.DB.Query(ctx, `SELECT d.id, d.league_id, d.name, d.user_team_id, d.coach_name, d.save_name, d.last_save_at,
+		COALESCE((SELECT s.year FROM snapshot s JOIN branch b ON b.id = s.branch_id AND b.status = 'active' WHERE s.dynasty_id = d.id ORDER BY s.pos DESC LIMIT 1), 0),
+		(SELECT count(*) FROM snapshot s WHERE s.dynasty_id = d.id)
+		FROM dynasty d ORDER BY d.last_save_at DESC NULLS LAST, d.id DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*Dynasty
+	for rows.Next() {
+		d := &Dynasty{}
+		if err := rows.Scan(&d.ID, &d.LeagueID, &d.Name, &d.UserTeamID, &d.Coach, &d.SaveName, &d.LastSave, &d.Year, &d.Snapshots); err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
+// Context returns the site context for a dynasty (0 = most recently played).
+func (q *Queries) Context(ctx context.Context, dynasty int) (*Ctx, error) {
+	q.mu.Lock()
+	if c, ok := q.ctx[dynasty]; ok && time.Since(q.at[dynasty]) < 30*time.Second {
+		q.mu.Unlock()
+		return c, nil
+	}
+	q.mu.Unlock()
+	c := &Ctx{}
+	err := q.s.DB.QueryRow(ctx, `SELECT d.id, d.league_id, d.base_year, d.name, b.id, s.season_index, s.year, s.week, s.week_type, s.stage, s.save_name, s.ingested_at
+		FROM snapshot s JOIN branch b ON b.id = s.branch_id AND b.status = 'active' JOIN dynasty d ON d.id = s.dynasty_id
+		WHERE ($1 = 0 OR d.id = $1)
+		ORDER BY d.last_save_at DESC NULLS LAST, s.pos DESC, s.id DESC LIMIT 1`, dynasty).Scan(&c.Dynasty, &c.LeagueID, &c.BaseYear, &c.Name, &c.Branch, &c.Season, &c.Year, &c.Week, &c.WeekType, &c.Stage, &c.SaveName, &c.LastUpdate)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNoData
+	}
+	if err != nil {
+		return nil, err
+	}
+	// Prefer the latest position on the active branch (a re-ingest of an old
+	// file must not move the site backwards).
+	_ = q.s.DB.QueryRow(ctx, `SELECT season_index, year, week, week_type, stage, save_name FROM snapshot WHERE branch_id = $1 ORDER BY pos DESC, id DESC LIMIT 1`, c.Branch).
+		Scan(&c.Season, &c.Year, &c.Week, &c.WeekType, &c.Stage, &c.SaveName)
+	if c.BaseYear == 0 {
+		c.BaseYear = c.Year - c.Season
+	}
+	rows, err := q.s.DB.Query(ctx, `SELECT DISTINCT season_index FROM player_season_stat WHERE branch_id = $1
+		UNION SELECT DISTINCT season_index FROM game WHERE branch_id = $1 ORDER BY 1 DESC`, c.Branch)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var s int
+		rows.Scan(&s)
+		if s >= 0 {
+			c.Seasons = append(c.Seasons, s)
+		}
+	}
+	rows.Close()
+	q.s.DB.QueryRow(ctx, `SELECT count(*) FROM snapshot WHERE dynasty_id = $1`, c.Dynasty).Scan(&c.Snapshots)
+	q.mu.Lock()
+	q.ctx[dynasty], q.at[dynasty] = c, time.Now()
+	q.mu.Unlock()
+	return c, nil
+}
+
+// Team is a program with its record for one season.
+type Team struct {
+	ID           int
+	Name         string // display name, e.g. "Alabama"
+	Short        string // abbreviation, e.g. "ALA"
+	Long         string
+	Nick         string
+	Asset        string
+	Color        string
+	AltColor     string
+	Conference   string
+	W, L         int
+	CW, CL       int
+	ConfStanding int
+	Streak       int
+	AP           int
+	Coaches      int
+	CFP          int
+	OffRank      int
+	DefRank      int
+	RecruitRank  int
+	HeadCoachRow int
+	Stats        Stats
+	HasSeason    bool
+}
+
+// Record formats W-L.
+func (t *Team) Record() string { return itoa(t.W) + "-" + itoa(t.L) }
+
+// ConfRecord formats conference W-L.
+func (t *Team) ConfRecord() string { return itoa(t.CW) + "-" + itoa(t.CL) }
+
+// Rank returns the CFP rank when published, else the AP rank (0 = unranked).
+func (t *Team) Rank() int {
+	if t.CFP > 0 && t.CFP <= 25 {
+		return t.CFP
+	}
+	if t.AP > 0 && t.AP <= 25 {
+		return t.AP
+	}
+	return 0
+}
+
+func itoa(n int) string {
+	neg := n < 0
+	if neg {
+		n = -n
+	}
+	b := []byte{}
+	for {
+		b = append([]byte{byte('0' + n%10)}, b...)
+		n /= 10
+		if n == 0 {
+			break
+		}
+	}
+	if neg {
+		b = append([]byte{'-'}, b...)
+	}
+	return string(b)
+}
+
+// Teams returns every program with its record for a season.
+func (q *Queries) Teams(ctx context.Context, c *Ctx, season int) (map[int]*Team, error) {
+	q.mu.Lock()
+	if m, ok := q.teams[[2]int{c.Branch, season}]; ok {
+		q.mu.Unlock()
+		return m, nil
+	}
+	q.mu.Unlock()
+	rows, err := q.s.DB.Query(ctx, `SELECT t.team_id, t.display_name, t.short_name, t.long_name, t.nick_name, t.asset_name, t.primary_color, t.secondary_color,
+		ts.conference, ts.wins, ts.losses, ts.conf_wins, ts.conf_losses, ts.conf_standing, ts.streak, ts.ap_rank, ts.coaches_rank, ts.cfp_rank,
+		ts.off_rank, ts.def_rank, ts.recruiting_rank, ts.head_coach_row, ts.stats, ts.team_id IS NOT NULL
+		FROM team t LEFT JOIN team_season ts ON ts.team_id = t.team_id AND ts.branch_id = $2 AND ts.season_index = $3
+		WHERE t.dynasty_id = $1`, c.Dynasty, c.Branch, season)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	m := map[int]*Team{}
+	for rows.Next() {
+		t := &Team{}
+		var conf *string
+		var w, l, cw, cl, cs, st, ap, co, cfp, off, def, rr, hc *int
+		var stats []byte
+		if err := rows.Scan(&t.ID, &t.Name, &t.Short, &t.Long, &t.Nick, &t.Asset, &t.Color, &t.AltColor, &conf, &w, &l, &cw, &cl, &cs, &st, &ap, &co, &cfp,
+			&off, &def, &rr, &hc, &stats, &t.HasSeason); err != nil {
+			return nil, err
+		}
+		if conf != nil {
+			t.Conference = *conf
+		}
+		for _, p := range []struct {
+			dst *int
+			src *int
+		}{{&t.W, w}, {&t.L, l}, {&t.CW, cw}, {&t.CL, cl}, {&t.ConfStanding, cs}, {&t.Streak, st}, {&t.AP, ap}, {&t.Coaches, co}, {&t.CFP, cfp},
+			{&t.OffRank, off}, {&t.DefRank, def}, {&t.RecruitRank, rr}, {&t.HeadCoachRow, hc}} {
+			if p.src != nil {
+				*p.dst = *p.src
+			}
+		}
+		if t.Color == "" {
+			t.Color = "#444444"
+		}
+		json.Unmarshal(stats, &t.Stats)
+		m[t.ID] = t
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	q.mu.Lock()
+	q.teams[[2]int{c.Branch, season}] = m
+	q.mu.Unlock()
+	return m, nil
+}
+
+// Game is one game on the schedule.
+type Game struct {
+	Season       int
+	Row          int
+	Week         int
+	WeekType     string
+	Status       string
+	Played       bool
+	Home, Away   int
+	HomeScore    int
+	AwayScore    int
+	HomeQ, AwayQ []int32
+	HomeOT       int
+	AwayOT       int
+	Overtime     bool
+	Month, Day   int
+	DayOfWeek    string
+	TimeOfDay    int
+	Network      string
+	Attendance   int
+	Temperature  int
+	Weather      string
+	Wind         string
+	WindSpeed    int
+	Stadium      string
+	BowlName     string
+	GameOfWeek   bool
+	HomeBox      Stats
+	AwayBox      Stats
+}
+
+const gameCols = `season_index, game_row, week, week_type, status, played, home_team, away_team, home_score, away_score, home_quarters, away_quarters,
+	home_ot, away_ot, overtime, month, day, day_of_week, time_of_day, network, attendance, temperature, weather, wind, wind_speed, stadium, bowl_name,
+	game_of_week, home_box, away_box`
+
+func scanGames(rows pgx.Rows) ([]*Game, error) {
+	defer rows.Close()
+	var out []*Game
+	for rows.Next() {
+		g := &Game{}
+		var hb, ab []byte
+		if err := rows.Scan(&g.Season, &g.Row, &g.Week, &g.WeekType, &g.Status, &g.Played, &g.Home, &g.Away, &g.HomeScore, &g.AwayScore, &g.HomeQ, &g.AwayQ,
+			&g.HomeOT, &g.AwayOT, &g.Overtime, &g.Month, &g.Day, &g.DayOfWeek, &g.TimeOfDay, &g.Network, &g.Attendance, &g.Temperature, &g.Weather, &g.Wind,
+			&g.WindSpeed, &g.Stadium, &g.BowlName, &g.GameOfWeek, &hb, &ab); err != nil {
+			return nil, err
+		}
+		json.Unmarshal(hb, &g.HomeBox)
+		json.Unmarshal(ab, &g.AwayBox)
+		out = append(out, g)
+	}
+	return out, rows.Err()
+}
+
+// WeekKey identifies a scoreboard week.
+type WeekKey struct {
+	WeekType string
+	Week     int
+	Games    int
+}
+
+// Weeks lists the weeks that have games in a season, in calendar order.
+func (q *Queries) Weeks(ctx context.Context, c *Ctx, season int) ([]WeekKey, error) {
+	rows, err := q.s.DB.Query(ctx, `SELECT week_type, week, count(*) FROM game WHERE branch_id = $1 AND season_index = $2 GROUP BY 1,2 ORDER BY 2, 1`, c.Branch, season)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []WeekKey
+	for rows.Next() {
+		var w WeekKey
+		rows.Scan(&w.WeekType, &w.Week, &w.Games)
+		out = append(out, w)
+	}
+	return out, rows.Err()
+}
+
+// GamesForWeek returns a scoreboard week.
+func (q *Queries) GamesForWeek(ctx context.Context, c *Ctx, season int, weekType string, week int) ([]*Game, error) {
+	rows, err := q.s.DB.Query(ctx, `SELECT `+gameCols+` FROM game WHERE branch_id = $1 AND season_index = $2 AND week_type = $3 AND week = $4
+		ORDER BY game_of_week DESC, month, day, time_of_day, game_row`, c.Branch, season, weekType, week)
+	if err != nil {
+		return nil, err
+	}
+	return scanGames(rows)
+}
+
+// TeamGames returns a team's schedule for a season.
+func (q *Queries) TeamGames(ctx context.Context, c *Ctx, season, team int) ([]*Game, error) {
+	rows, err := q.s.DB.Query(ctx, `SELECT `+gameCols+` FROM game WHERE branch_id = $1 AND season_index = $2 AND (home_team = $3 OR away_team = $3)
+		ORDER BY week, month, day`, c.Branch, season, team)
+	if err != nil {
+		return nil, err
+	}
+	return scanGames(rows)
+}
+
+// Game returns one game.
+func (q *Queries) Game(ctx context.Context, c *Ctx, season, row int) (*Game, error) {
+	rows, err := q.s.DB.Query(ctx, `SELECT `+gameCols+` FROM game WHERE branch_id = $1 AND season_index = $2 AND game_row = $3`, c.Branch, season, row)
+	if err != nil {
+		return nil, err
+	}
+	gs, err := scanGames(rows)
+	if err != nil || len(gs) == 0 {
+		return nil, err
+	}
+	return gs[0], nil
+}
+
+// PlayerRef names a person as shown on a page.
+type PlayerRef struct {
+	ID        uuid.UUID
+	First     string
+	Last      string
+	Position  string
+	Jersey    int
+	TeamID    int
+	Portrait  string
+	ClassYear string
+}
+
+// Name returns "First Last".
+func (p PlayerRef) Name() string { return strings.TrimSpace(p.First + " " + p.Last) }
+
+// Short returns "F. Last".
+func (p PlayerRef) Short() string {
+	if p.First == "" {
+		return p.Last
+	}
+	return p.First[:1] + ". " + p.Last
+}
+
+// Line is a player's stat line in one display group.
+type Line struct {
+	Player PlayerRef
+	TeamID int
+	Group  string
+	Stats  Stats
+}
+
+// GameLines returns every player line for a game, merged by display group.
+func (q *Queries) GameLines(ctx context.Context, c *Ctx, season, row int) ([]*Line, error) {
+	rows, err := q.s.DB.Query(ctx, `SELECT s.person_id, p.first_name, p.last_name, COALESCE(ps.position, ''), COALESCE(ps.jersey, 0), COALESCE(ps.portrait, ''),
+		s.team_id, s.category, s.stats
+		FROM player_game_stat s JOIN person p ON p.id = s.person_id
+		LEFT JOIN player_season ps ON ps.branch_id = s.branch_id AND ps.season_index = s.season_index AND ps.person_id = s.person_id
+		WHERE s.branch_id = $1 AND s.season_index = $2 AND s.game_row = $3`, c.Branch, season, row)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	idx := map[string]*Line{}
+	var out []*Line
+	for rows.Next() {
+		var pr PlayerRef
+		var team int
+		var cat string
+		var raw []byte
+		if err := rows.Scan(&pr.ID, &pr.First, &pr.Last, &pr.Position, &pr.Jersey, &pr.Portrait, &team, &cat, &raw); err != nil {
+			return nil, err
+		}
+		var st Stats
+		json.Unmarshal(raw, &st)
+		g := Group(cat)
+		k := pr.ID.String() + g
+		l, ok := idx[k]
+		if !ok {
+			l = &Line{Player: pr, TeamID: team, Group: g, Stats: Stats{}}
+			idx[k] = l
+			out = append(out, l)
+		}
+		l.Stats.Add(st)
+	}
+	return out, rows.Err()
+}
+
+// ScoringPlay is a scoring summary entry with participants resolved.
+type ScoringPlay struct {
+	Seq          int
+	Quarter      int
+	ClockSec     int
+	HomeScore    int
+	AwayScore    int
+	HomePrev     int
+	AwayPrev     int
+	Conversion   string
+	ScoringTeam  string
+	Participants []Participant
+}
+
+// Participant is a team leader's cumulative line at the time of a score.
+type Participant struct {
+	Player PlayerRef
+	Stats  Stats
+}
+
+// ScoringPlays returns the stored scoring summary for a game.
+func (q *Queries) ScoringPlays(ctx context.Context, c *Ctx, season, row int) ([]*ScoringPlay, error) {
+	rows, err := q.s.DB.Query(ctx, `SELECT seq, quarter, clock_sec, home_score, away_score, home_prev, away_prev, conversion, scoring_team, participants
+		FROM scoring_play WHERE branch_id = $1 AND season_index = $2 AND game_row = $3 ORDER BY seq`, c.Branch, season, row)
+	if err != nil {
+		return nil, err
+	}
+	var out []*ScoringPlay
+	ids := map[uuid.UUID]bool{}
+	type rawPart struct {
+		PersonID *uuid.UUID `json:"personId"`
+		Stats    Stats      `json:"stats"`
+	}
+	raws := [][]rawPart{}
+	for rows.Next() {
+		p := &ScoringPlay{}
+		var raw []byte
+		if err := rows.Scan(&p.Seq, &p.Quarter, &p.ClockSec, &p.HomeScore, &p.AwayScore, &p.HomePrev, &p.AwayPrev, &p.Conversion, &p.ScoringTeam, &raw); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		var parts []rawPart
+		json.Unmarshal(raw, &parts)
+		for _, rp := range parts {
+			if rp.PersonID != nil {
+				ids[*rp.PersonID] = true
+			}
+		}
+		raws = append(raws, parts)
+		out = append(out, p)
+	}
+	rows.Close()
+	refs, err := q.PlayerRefs(ctx, c, season, ids)
+	if err != nil {
+		return nil, err
+	}
+	for i, parts := range raws {
+		for _, rp := range parts {
+			pt := Participant{Stats: rp.Stats}
+			if rp.PersonID != nil {
+				pt.Player = refs[*rp.PersonID]
+			}
+			out[i].Participants = append(out[i].Participants, pt)
+		}
+	}
+	return out, nil
+}
+
+// PlayerRefs resolves people with their bio for a season (latest otherwise).
+func (q *Queries) PlayerRefs(ctx context.Context, c *Ctx, season int, ids map[uuid.UUID]bool) (map[uuid.UUID]PlayerRef, error) {
+	list := make([]uuid.UUID, 0, len(ids))
+	for id := range ids {
+		list = append(list, id)
+	}
+	out := map[uuid.UUID]PlayerRef{}
+	if len(list) == 0 {
+		return out, nil
+	}
+	rows, err := q.s.DB.Query(ctx, `SELECT p.id, p.first_name, p.last_name, COALESCE(ps.position, ''), COALESCE(ps.jersey, 0), COALESCE(ps.team_id, -1), COALESCE(ps.portrait, ''), COALESCE(ps.school_year, '')
+		FROM person p LEFT JOIN LATERAL (SELECT * FROM player_season x WHERE x.branch_id = $1 AND x.person_id = p.id ORDER BY (x.season_index = $2) DESC, x.season_index DESC LIMIT 1) ps ON true
+		WHERE p.id = ANY($3)`, c.Branch, season, list)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var r PlayerRef
+		if err := rows.Scan(&r.ID, &r.First, &r.Last, &r.Position, &r.Jersey, &r.TeamID, &r.Portrait, &r.ClassYear); err != nil {
+			return nil, err
+		}
+		out[r.ID] = r
+	}
+	return out, rows.Err()
+}
+
+// SeasonLine is a person's season totals in one display group for one team.
+type SeasonLine struct {
+	Player PlayerRef
+	Season int
+	TeamID int
+	Group  string
+	Stats  Stats
+}
+
+// SeasonLines returns season lines filtered by season (or -1 for all),
+// person (uuid.Nil for all) and team (-1 for all).
+func (q *Queries) SeasonLines(ctx context.Context, c *Ctx, season int, person uuid.UUID, team int) ([]*SeasonLine, error) {
+	rows, err := q.s.DB.Query(ctx, `SELECT s.season_index, s.person_id, p.first_name, p.last_name, COALESCE(ps.position, ''), COALESCE(ps.jersey, 0), COALESCE(ps.portrait, ''),
+		COALESCE(ps.school_year, ''), s.team_id, s.category, s.stats
+		FROM player_season_stat s JOIN person p ON p.id = s.person_id
+		LEFT JOIN (SELECT DISTINCT ON (x.person_id) x.* FROM player_season x WHERE x.branch_id = $1 AND ($3::uuid IS NULL OR x.person_id = $3)
+			ORDER BY x.person_id, (x.season_index = $2) DESC, x.season_index DESC) ps ON ps.person_id = s.person_id
+		WHERE s.branch_id = $1 AND ($2 < 0 OR s.season_index = $2) AND ($3::uuid IS NULL OR s.person_id = $3) AND ($4 < 0 OR s.team_id = $4)`,
+		c.Branch, season, nullUUID(person), team)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	idx := map[string]*SeasonLine{}
+	var out []*SeasonLine
+	for rows.Next() {
+		var l SeasonLine
+		var cat string
+		var raw []byte
+		if err := rows.Scan(&l.Season, &l.Player.ID, &l.Player.First, &l.Player.Last, &l.Player.Position, &l.Player.Jersey, &l.Player.Portrait, &l.Player.ClassYear,
+			&l.TeamID, &cat, &raw); err != nil {
+			return nil, err
+		}
+		var st Stats
+		json.Unmarshal(raw, &st)
+		l.Group = Group(cat)
+		l.Player.TeamID = l.TeamID
+		k := l.Player.ID.String() + "|" + itoa(l.Season) + "|" + itoa(l.TeamID) + "|" + l.Group
+		if e, ok := idx[k]; ok {
+			e.Stats.Add(st)
+			continue
+		}
+		l.Stats = Stats{}
+		l.Stats.Add(st)
+		ll := l
+		idx[k] = &ll
+		out = append(out, &ll)
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Season < out[j].Season })
+	return out, rows.Err()
+}
+
+func nullUUID(id uuid.UUID) any {
+	if id == uuid.Nil {
+		return nil
+	}
+	return id
+}
+
+// GameLog is a player's line in one game.
+type GameLog struct {
+	Game  *Game
+	Group string
+	Stats Stats
+}
+
+// PlayerGameLog returns a person's game lines for a season.
+func (q *Queries) PlayerGameLog(ctx context.Context, c *Ctx, season int, person uuid.UUID) ([]*GameLog, error) {
+	rows, err := q.s.DB.Query(ctx, `SELECT s.game_row, s.category, s.stats FROM player_game_stat s WHERE s.branch_id = $1 AND s.season_index = $2 AND s.person_id = $3`,
+		c.Branch, season, person)
+	if err != nil {
+		return nil, err
+	}
+	type key struct {
+		row   int
+		group string
+	}
+	acc := map[key]Stats{}
+	var keys []key
+	for rows.Next() {
+		var row int
+		var cat string
+		var raw []byte
+		if err := rows.Scan(&row, &cat, &raw); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		var st Stats
+		json.Unmarshal(raw, &st)
+		k := key{row, Group(cat)}
+		if _, ok := acc[k]; !ok {
+			acc[k] = Stats{}
+			keys = append(keys, k)
+		}
+		acc[k].Add(st)
+	}
+	rows.Close()
+	gameRows := map[int]*Game{}
+	if len(keys) > 0 {
+		list := []int32{}
+		for _, k := range keys {
+			list = append(list, int32(k.row))
+		}
+		gr, err := q.s.DB.Query(ctx, `SELECT `+gameCols+` FROM game WHERE branch_id = $1 AND season_index = $2 AND game_row = ANY($3)`, c.Branch, season, list)
+		if err != nil {
+			return nil, err
+		}
+		gs, err := scanGames(gr)
+		if err != nil {
+			return nil, err
+		}
+		for _, g := range gs {
+			gameRows[g.Row] = g
+		}
+	}
+	var out []*GameLog
+	for _, k := range keys {
+		if g := gameRows[k.row]; g != nil {
+			out = append(out, &GameLog{Game: g, Group: k.group, Stats: acc[k]})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Game.Week < out[j].Game.Week })
+	return out, nil
+}
+
+// Bio is a person's profile.
+type Bio struct {
+	PlayerRef
+	HomeTown    string
+	HomeState   string
+	Height      int
+	Weight      int
+	Stars       int
+	Redshirt    string
+	OnRoster    bool
+	Captain     bool
+	Injury      string
+	BioSeason   int
+	FirstSeason int
+	Provisional bool
+}
+
+// Person returns a person's profile with their most recent season bio.
+func (q *Queries) Person(ctx context.Context, c *Ctx, id uuid.UUID) (*Bio, error) {
+	b := &Bio{}
+	err := q.s.DB.QueryRow(ctx, `SELECT p.id, p.first_name, p.last_name, p.home_town, p.home_state, p.first_season, p.provisional,
+		COALESCE(ps.position,''), COALESCE(ps.jersey,0), COALESCE(ps.team_id,-1), COALESCE(ps.portrait,''), COALESCE(ps.school_year,''),
+		COALESCE(ps.height,0), COALESCE(ps.weight,0), COALESCE(ps.star_rating,0), COALESCE(ps.redshirt,''), COALESCE(ps.on_roster,false),
+		COALESCE(ps.is_captain,false), COALESCE(ps.injury_status,''), COALESCE(ps.season_index,-1)
+		FROM person p LEFT JOIN LATERAL (SELECT * FROM player_season x WHERE x.branch_id = $1 AND x.person_id = p.id ORDER BY x.season_index DESC LIMIT 1) ps ON true
+		WHERE p.id = $2 AND p.dynasty_id = $3`, c.Branch, id, c.Dynasty).Scan(&b.ID, &b.First, &b.Last, &b.HomeTown, &b.HomeState, &b.FirstSeason, &b.Provisional,
+		&b.Position, &b.Jersey, &b.TeamID, &b.Portrait, &b.ClassYear, &b.Height, &b.Weight, &b.Stars, &b.Redshirt, &b.OnRoster, &b.Captain, &b.Injury, &b.BioSeason)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	return b, err
+}
+
+// RosterEntry is a player on a team's roster.
+type RosterEntry struct {
+	PlayerRef
+	Height, Weight int
+	HomeTown       string
+	HomeState      string
+	Stars          int
+	Redshirt       string
+	Captain        bool
+	Injury         string
+}
+
+// Roster returns a team's roster for a season.
+func (q *Queries) Roster(ctx context.Context, c *Ctx, season, team int) ([]*RosterEntry, error) {
+	rows, err := q.s.DB.Query(ctx, `SELECT p.id, p.first_name, p.last_name, ps.position, ps.jersey, ps.team_id, ps.portrait, ps.school_year, ps.height, ps.weight,
+		p.home_town, p.home_state, ps.star_rating, ps.redshirt, ps.is_captain, ps.injury_status
+		FROM player_season ps JOIN person p ON p.id = ps.person_id
+		WHERE ps.branch_id = $1 AND ps.season_index = $2 AND ps.team_id = $3 AND ps.on_roster ORDER BY ps.jersey, p.last_name`, c.Branch, season, team)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*RosterEntry
+	for rows.Next() {
+		r := &RosterEntry{}
+		if err := rows.Scan(&r.ID, &r.First, &r.Last, &r.Position, &r.Jersey, &r.TeamID, &r.Portrait, &r.ClassYear, &r.Height, &r.Weight, &r.HomeTown, &r.HomeState,
+			&r.Stars, &r.Redshirt, &r.Captain, &r.Injury); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// Coach is a staff member for a season.
+type Coach struct {
+	Row                   int
+	First, Last, Position string
+	TeamID, Age           int
+	Asset                 string
+	W, L, SW, SL          int
+	BowlW, BowlL          int
+	Conf, Natl            int
+	PlayoffW, PlayoffL    int
+	IsUser                bool
+}
+
+// Coaches returns a team's coaching staff for a season (team -1 = all).
+func (q *Queries) Coaches(ctx context.Context, c *Ctx, season, team int) ([]*Coach, error) {
+	rows, err := q.s.DB.Query(ctx, `SELECT coach_row, first_name, last_name, position, team_id, age, asset_name, wins, losses, school_wins, school_losses,
+		bowl_wins, bowl_losses, conf_titles, natl_titles, playoff_wins, playoff_losses, is_user FROM coach_season
+		WHERE branch_id = $1 AND season_index = $2 AND ($3 < 0 OR team_id = $3) AND team_id >= 0
+		ORDER BY CASE position WHEN 'HeadCoach' THEN 0 WHEN 'OffensiveCoordinator' THEN 1 ELSE 2 END`, c.Branch, season, team)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*Coach
+	for rows.Next() {
+		k := &Coach{}
+		if err := rows.Scan(&k.Row, &k.First, &k.Last, &k.Position, &k.TeamID, &k.Age, &k.Asset, &k.W, &k.L, &k.SW, &k.SL, &k.BowlW, &k.BowlL, &k.Conf, &k.Natl,
+			&k.PlayoffW, &k.PlayoffL, &k.IsUser); err != nil {
+			return nil, err
+		}
+		out = append(out, k)
+	}
+	return out, rows.Err()
+}
+
+// PollEntry is one team in a poll week.
+type PollEntry struct {
+	TeamID     int
+	Rank       int
+	Points     int
+	FirstPlace int
+	PrevRank   int
+	W, L       int
+}
+
+// PollWeek identifies a recorded poll.
+type PollWeek struct {
+	WeekType string
+	Week     int
+}
+
+// PollWeeks lists recorded poll weeks for a season, newest first.
+func (q *Queries) PollWeeks(ctx context.Context, c *Ctx, season int) ([]PollWeek, error) {
+	rows, err := q.s.DB.Query(ctx, `SELECT DISTINCT week_type, week FROM poll_week WHERE branch_id = $1 AND season_index = $2 ORDER BY week DESC`, c.Branch, season)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []PollWeek
+	for rows.Next() {
+		var p PollWeek
+		rows.Scan(&p.WeekType, &p.Week)
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// Poll returns one poll for a week.
+func (q *Queries) Poll(ctx context.Context, c *Ctx, season int, w PollWeek, poll string) ([]*PollEntry, error) {
+	rows, err := q.s.DB.Query(ctx, `SELECT team_id, rank, points, first_place, prev_rank, wins, losses FROM poll_week
+		WHERE branch_id = $1 AND season_index = $2 AND week_type = $3 AND week = $4 AND poll = $5 ORDER BY rank`, c.Branch, season, w.WeekType, w.Week, poll)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*PollEntry
+	for rows.Next() {
+		p := &PollEntry{}
+		rows.Scan(&p.TeamID, &p.Rank, &p.Points, &p.FirstPlace, &p.PrevRank, &p.W, &p.L)
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// Award is an honor won by a player.
+type Award struct {
+	PersonID    *uuid.UUID
+	First, Last string
+	TeamID      int
+	Position    string
+	Type        string
+	Period      string
+	PeriodIndex int
+}
+
+// Awards returns player awards, optionally for one person.
+func (q *Queries) Awards(ctx context.Context, c *Ctx, person uuid.UUID) ([]*Award, error) {
+	rows, err := q.s.DB.Query(ctx, `SELECT person_id, first_name, last_name, team_id, position, award_type, period, period_index FROM award
+		WHERE branch_id = $1 AND ($2::uuid IS NULL OR person_id = $2) ORDER BY period_index DESC, award_type`, c.Branch, nullUUID(person))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*Award
+	for rows.Next() {
+		a := &Award{}
+		if err := rows.Scan(&a.PersonID, &a.First, &a.Last, &a.TeamID, &a.Position, &a.Type, &a.Period, &a.PeriodIndex); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+// LeagueAward is a historical national award winner.
+type LeagueAward struct {
+	Type, First, Last, Position, Team string
+	Seq                               int
+}
+
+// LeagueAwards returns the league's award history.
+func (q *Queries) LeagueAwards(ctx context.Context, c *Ctx) ([]*LeagueAward, error) {
+	rows, err := q.s.DB.Query(ctx, `SELECT award_type, first_name, last_name, position, team_name, seq FROM league_award WHERE branch_id = $1 ORDER BY seq DESC`, c.Branch)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*LeagueAward
+	for rows.Next() {
+		a := &LeagueAward{}
+		rows.Scan(&a.Type, &a.First, &a.Last, &a.Position, &a.Team, &a.Seq)
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+// ConfChamp is a conference title game result.
+type ConfChamp struct {
+	Seq                      int
+	Conference, Winner, Loser string
+	WS, LS, WR, LR           int
+	Coach                    string
+}
+
+// ConferenceChampions returns title game history, newest first.
+func (q *Queries) ConferenceChampions(ctx context.Context, c *Ctx) ([]*ConfChamp, error) {
+	rows, err := q.s.DB.Query(ctx, `SELECT seq, conference, winner, loser, winner_score, loser_score, winner_rank, loser_rank, coach_name FROM conference_champion
+		WHERE branch_id = $1 ORDER BY seq DESC`, c.Branch)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*ConfChamp
+	for rows.Next() {
+		x := &ConfChamp{}
+		rows.Scan(&x.Seq, &x.Conference, &x.Winner, &x.Loser, &x.WS, &x.LS, &x.WR, &x.LR, &x.Coach)
+		out = append(out, x)
+	}
+	return out, rows.Err()
+}
+
+// Record is a record-book entry.
+type Record struct {
+	Scope, ScopeName, Period, Stat string
+	Rank, Value                    int
+	First, Last, Position, Team    string
+	Year                           int
+}
+
+// RecordBook returns record-book entries for a scope/name.
+func (q *Queries) RecordBook(ctx context.Context, c *Ctx, scope, name string) ([]*Record, error) {
+	rows, err := q.s.DB.Query(ctx, `SELECT scope, scope_name, period, stat_type, rank, value, first_name, last_name, position, team_name, year FROM record_book
+		WHERE branch_id = $1 AND scope = $2 AND ($3 = '' OR scope_name = $3) ORDER BY period, stat_type, rank`, c.Branch, scope, name)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*Record
+	for rows.Next() {
+		r := &Record{}
+		rows.Scan(&r.Scope, &r.ScopeName, &r.Period, &r.Stat, &r.Rank, &r.Value, &r.First, &r.Last, &r.Position, &r.Team, &r.Year)
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// RecruitEntry is a prospect in a recruiting class.
+type RecruitEntry struct {
+	PlayerRef
+	HomeTown, HomeState string
+	Height, Weight      int
+	Class               string
+	Stars               int
+	National, PosRank   int
+	StateRank           int
+	Stage               string
+	Committed           int
+}
+
+// Recruits returns a season's recruiting class, best ranked first.
+func (q *Queries) Recruits(ctx context.Context, c *Ctx, season, team int) ([]*RecruitEntry, error) {
+	rows, err := q.s.DB.Query(ctx, `SELECT p.id, p.first_name, p.last_name, r.position, p.home_town, p.home_state, COALESCE(ps.height,0), COALESCE(ps.weight,0),
+		COALESCE(ps.portrait,''), r.class, r.stars, r.national_rank, r.position_rank, r.state_rank, r.stage, r.committed_team
+		FROM recruit r JOIN person p ON p.id = r.person_id
+		LEFT JOIN player_season ps ON ps.branch_id = r.branch_id AND ps.season_index = r.season_index AND ps.person_id = r.person_id
+		WHERE r.branch_id = $1 AND r.season_index = $2 AND ($3 < 0 OR r.committed_team = $3)
+		ORDER BY (r.national_rank = 0), r.national_rank, r.stars DESC`, c.Branch, season, team)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*RecruitEntry
+	for rows.Next() {
+		r := &RecruitEntry{}
+		if err := rows.Scan(&r.ID, &r.First, &r.Last, &r.Position, &r.HomeTown, &r.HomeState, &r.Height, &r.Weight, &r.Portrait, &r.Class, &r.Stars, &r.National,
+			&r.PosRank, &r.StateRank, &r.Stage, &r.Committed); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// Injury is a current injury.
+type Injury struct {
+	Player             PlayerRef
+	Type, Severity     string
+	MinWeeks, MaxWeeks int
+}
+
+// Injuries returns a team's current injuries.
+func (q *Queries) Injuries(ctx context.Context, c *Ctx, team int) ([]*Injury, error) {
+	rows, err := q.s.DB.Query(ctx, `SELECT p.id, p.first_name, p.last_name, i.type, i.severity, i.min_weeks, i.max_weeks FROM injury i JOIN person p ON p.id = i.person_id
+		WHERE i.branch_id = $1 AND i.team_id = $2 ORDER BY i.max_weeks DESC`, c.Branch, team)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*Injury
+	for rows.Next() {
+		x := &Injury{}
+		rows.Scan(&x.Player.ID, &x.Player.First, &x.Player.Last, &x.Type, &x.Severity, &x.MinWeeks, &x.MaxWeeks)
+		out = append(out, x)
+	}
+	return out, rows.Err()
+}
+
+// DepthSlot is a depth chart entry.
+type DepthSlot struct {
+	Position string
+	Slot     int
+	Player   PlayerRef
+}
+
+// DepthChart returns a team's current depth chart.
+func (q *Queries) DepthChart(ctx context.Context, c *Ctx, team int) ([]*DepthSlot, error) {
+	rows, err := q.s.DB.Query(ctx, `SELECT d.position, d.slot, p.id, p.first_name, p.last_name FROM depth_chart d JOIN person p ON p.id = d.person_id
+		WHERE d.branch_id = $1 AND d.team_id = $2 ORDER BY d.position, d.slot`, c.Branch, team)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*DepthSlot
+	for rows.Next() {
+		x := &DepthSlot{}
+		rows.Scan(&x.Position, &x.Slot, &x.Player.ID, &x.Player.First, &x.Player.Last)
+		out = append(out, x)
+	}
+	return out, rows.Err()
+}
+
+// Event is a player event (leaving intent, position change).
+type Event struct {
+	Season int
+	Kind   string
+	Detail map[string]any
+}
+
+// Events returns a person's events.
+func (q *Queries) Events(ctx context.Context, c *Ctx, person uuid.UUID) ([]*Event, error) {
+	rows, err := q.s.DB.Query(ctx, `SELECT season_index, kind, detail FROM player_event WHERE branch_id = $1 AND person_id = $2 ORDER BY season_index`, c.Branch, person)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*Event
+	for rows.Next() {
+		e := &Event{}
+		var raw []byte
+		rows.Scan(&e.Season, &e.Kind, &raw)
+		json.Unmarshal(raw, &e.Detail)
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// Rivalry is a series record.
+type Rivalry struct {
+	Name                 string
+	Team1, Team2         int
+	W1, W2               int
+	StreakLen, StreakTeam int
+}
+
+// Rivalries returns rivalries involving a team (-1 = all).
+func (q *Queries) Rivalries(ctx context.Context, c *Ctx, team int) ([]*Rivalry, error) {
+	rows, err := q.s.DB.Query(ctx, `SELECT name, team1, team2, team1_wins, team2_wins, streak_len, streak_team FROM rivalry
+		WHERE branch_id = $1 AND ($2 < 0 OR team1 = $2 OR team2 = $2) AND name <> '' ORDER BY name`, c.Branch, team)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*Rivalry
+	for rows.Next() {
+		r := &Rivalry{}
+		rows.Scan(&r.Name, &r.Team1, &r.Team2, &r.W1, &r.W2, &r.StreakLen, &r.StreakTeam)
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// SearchPeople finds people by name.
+func (q *Queries) SearchPeople(ctx context.Context, c *Ctx, term string) ([]PlayerRef, error) {
+	like := "%" + strings.ToLower(term) + "%"
+	rows, err := q.s.DB.Query(ctx, `SELECT p.id, p.first_name, p.last_name, COALESCE(ps.position,''), COALESCE(ps.jersey,0), COALESCE(ps.team_id,-1), COALESCE(ps.portrait,''), COALESCE(ps.school_year,'')
+		FROM person p JOIN LATERAL (SELECT * FROM player_season x WHERE x.branch_id = $1 AND x.person_id = p.id ORDER BY x.season_index DESC LIMIT 1) ps ON true
+		WHERE p.dynasty_id = $2 AND lower(p.first_name || ' ' || p.last_name) LIKE $3 ORDER BY ps.on_roster DESC, p.last_name LIMIT 50`, c.Branch, c.Dynasty, like)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []PlayerRef
+	for rows.Next() {
+		var r PlayerRef
+		rows.Scan(&r.ID, &r.First, &r.Last, &r.Position, &r.Jersey, &r.TeamID, &r.Portrait, &r.ClassYear)
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// AdminInfo summarizes ingest state.
+type AdminInfo struct {
+	Snapshots []SnapshotInfo
+	Branches  []BranchInfo
+	Flags     []FlagInfo
+	Counts    map[string]int64
+}
+
+type SnapshotInfo struct {
+	ID, Branch, Season, Year, Week int
+	Stage, WeekType, Save, SHA     string
+	Ingested                       time.Time
+}
+
+type BranchInfo struct {
+	ID, Parent int
+	Status     string
+	Created    time.Time
+}
+
+type FlagInfo struct {
+	Kind    string
+	Detail  string
+	Created time.Time
+}
+
+// Admin returns ingest diagnostics for the current dynasty.
+func (q *Queries) Admin(ctx context.Context, c *Ctx) (*AdminInfo, error) {
+	a := &AdminInfo{Counts: map[string]int64{}}
+	rows, err := q.s.DB.Query(ctx, `SELECT id, branch_id, season_index, year, week, stage, week_type, save_name, sha256, ingested_at FROM snapshot WHERE dynasty_id = $1 ORDER BY id DESC LIMIT 50`, c.Dynasty)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var s SnapshotInfo
+		rows.Scan(&s.ID, &s.Branch, &s.Season, &s.Year, &s.Week, &s.Stage, &s.WeekType, &s.Save, &s.SHA, &s.Ingested)
+		a.Snapshots = append(a.Snapshots, s)
+	}
+	rows.Close()
+	rows, err = q.s.DB.Query(ctx, `SELECT id, COALESCE(parent_id, 0), status, created_at FROM branch WHERE dynasty_id = $1 ORDER BY id`, c.Dynasty)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var b BranchInfo
+		rows.Scan(&b.ID, &b.Parent, &b.Status, &b.Created)
+		a.Branches = append(a.Branches, b)
+	}
+	rows.Close()
+	rows, err = q.s.DB.Query(ctx, `SELECT kind, detail::text, created_at FROM review_flag WHERE dynasty_id = $1 AND NOT resolved ORDER BY id DESC LIMIT 100`, c.Dynasty)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var f FlagInfo
+		rows.Scan(&f.Kind, &f.Detail, &f.Created)
+		a.Flags = append(a.Flags, f)
+	}
+	rows.Close()
+	for _, t := range []string{"game", "player_game_stat", "player_season_stat", "scoring_play", "award"} {
+		var n int64
+		q.s.DB.QueryRow(ctx, "SELECT count(*) FROM "+t+" WHERE branch_id = $1", c.Branch).Scan(&n)
+		a.Counts[t] = n
+	}
+	var n int64
+	q.s.DB.QueryRow(ctx, "SELECT count(*) FROM person WHERE dynasty_id = $1", c.Dynasty).Scan(&n)
+	a.Counts["person"] = n
+	return a, nil
+}

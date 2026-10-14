@@ -1,0 +1,8 @@
+{{define "title"}}Waiting for a save{{end}}
+{{define "content"}}
+<div class="empty card">
+  <h1>No dynasty data yet</h1>
+  <p>The server is watching <code>{{.SavesDir}}</code>. Advance a week (the game autosaves) or save your dynasty, and it will appear here automatically.</p>
+  {{with .Status}}{{with .LastError}}<p class="loss">Last error: {{.}}</p>{{end}}{{end}}
+</div>
+{{end}}

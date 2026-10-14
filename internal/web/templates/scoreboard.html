@@ -1,0 +1,26 @@
+{{define "title"}}Scoreboard{{end}}
+{{define "content"}}
+<h1 class="page-title">College Football Scoreboard</h1>
+<form class="filters" method="get">
+  <select name="season" onchange="this.form.week.value=''; this.form.submit()">
+    {{$sel := .Season}}{{$c := .C}}{{range .C.Seasons}}<option value="{{year $c .}}" {{if eq . $sel}}selected{{end}}>{{year $c .}}</option>{{end}}
+  </select>
+  <input type="hidden" name="week" value="{{.Week}}"><input type="hidden" name="type" value="{{.WeekType}}">
+  <select name="conf" onchange="this.form.submit()">
+    <option value="">All Conferences</option>
+    {{$conf := .Conf}}{{range .Confs}}<option {{if eq . $conf}}selected{{end}}>{{.}}</option>{{end}}
+  </select>
+  <label class="small"><input type="checkbox" name="top25" value="1" {{if .Top25}}checked{{end}} onchange="this.form.submit()"> Top 25 only</label>
+</form>
+<div class="weeks">
+  {{$wt := .WeekType}}{{$wk := .Week}}{{$y := year .C .Season}}
+  {{range .Weeks}}<a href="/scoreboard?season={{$y}}&type={{.WeekType}}&week={{.Week}}" class="{{if and (eq .WeekType $wt) (eq .Week $wk)}}on{{end}}">{{weekShort .WeekType .Week}}<span>{{.Games}} games</span></a>{{end}}
+</div>
+<h2 class="page-title" style="font-size:18px">{{weekLabel .WeekType .Week}}</h2>
+{{range .Days}}
+  <h3 class="day-h">{{.Label}}</h3>
+  <div class="sb-grid">{{range .Games}}{{template "gamecard" .}}{{end}}</div>
+{{else}}
+  <div class="card card-b muted">No games this week.</div>
+{{end}}
+{{end}}

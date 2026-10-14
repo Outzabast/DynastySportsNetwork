@@ -1,0 +1,45 @@
+{{define "title"}}Awards{{end}}
+{{define "content"}}
+<h1 class="page-title">College Football Awards</h1>
+{{$teams := .Teams}}
+<div class="grid g-2">
+  <div>
+    {{range .Seasons}}
+    <div class="card">
+      <h2>{{.Year}} National Awards</h2>
+      {{range .Major}}{{$t := team $teams .TeamID}}
+      <div class="award">{{with trophy .Type}}<img class="tr" src="{{.}}" alt="">{{end}}
+        <div style="flex:1"><div class="an">{{awardName .Type}}</div>
+          <div class="w">{{if .PersonID}}<a href="/player/{{.PersonID}}">{{.First}} {{.Last}}</a>{{else}}{{.First}} {{.Last}}{{end}}</div>
+          <div class="muted small">{{.Position}} · {{$t.Long}}</div></div>
+        {{template "teamlogo" $t}}</div>
+      {{end}}
+    </div>
+    {{else}}<div class="card card-b muted">No national awards have been presented yet.</div>{{end}}
+
+    {{with .AllAm}}
+    <div class="card">
+      <h2>{{year $.C $.Season}} All-America Teams</h2>
+      <div class="tbl-wrap"><table class="tbl">
+        <thead><tr><th class="l">Team</th><th class="l">Pos</th><th class="l">Player</th><th class="l">School</th></tr></thead>
+        <tbody>{{range .}}{{$t := team $teams .TeamID}}<tr><td>{{awardName .Type}}</td><td class="l">{{.Position}}</td><td class="l">{{if .PersonID}}<a href="/player/{{.PersonID}}">{{.First}} {{.Last}}</a>{{else}}{{.First}} {{.Last}}{{end}}</td><td class="l"><span class="tm">{{template "teamlogo" $t}}{{$t.Name}}</span></td></tr>{{end}}</tbody>
+      </table></div>
+    </div>
+    {{end}}
+  </div>
+  <div>
+    {{with .Weekly}}
+    <div class="card">
+      <h2>Players of the Week</h2>
+      {{range .}}{{$t := team $teams .TeamID}}<div class="rank-row">{{template "teamlogo" $t}}<div class="t">{{if .PersonID}}<a href="/player/{{.PersonID}}">{{.First}} {{.Last}}</a>{{else}}{{.First}} {{.Last}}{{end}}<div class="muted small" style="font-weight:400">{{awardName .Type}}</div></div><span class="r">Wk {{.PeriodIndex}}</span></div>{{end}}
+    </div>
+    {{end}}
+    {{with .History}}
+    <div class="card">
+      <h2>Award History</h2>
+      {{range .}}<div class="rank-row"><div class="t">{{.First}} {{.Last}}<div class="muted small" style="font-weight:400">{{awardName .Type}} · {{.Position}}</div></div><span class="r">{{.Team}}</span></div>{{end}}
+    </div>
+    {{end}}
+  </div>
+</div>
+{{end}}

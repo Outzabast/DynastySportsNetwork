@@ -1,0 +1,10 @@
+{{define "title"}}Search{{end}}
+{{define "content"}}
+<h1 class="page-title">Search</h1>
+<form class="filters" action="/search"><input name="q" value="{{.Q}}" placeholder="Player or team" autofocus style="min-width:280px"></form>
+{{$teams := .Teams}}
+{{with .TeamHits}}<div class="card"><h2>Teams</h2>{{range .}}<div class="rank-row">{{template "teamlogo" .}}<a class="t" href="{{teamURL .}}">{{.Long}} {{.Nick}}</a><span class="r">{{.Conference}}</span></div>{{end}}</div>{{end}}
+{{with .People}}<div class="card"><h2>Players</h2>{{range .}}{{$t := team $teams .TeamID}}
+  <div class="ldr"><img class="hs" src="{{portrait .Portrait}}" alt="" loading="lazy"><div class="who"><a href="/player/{{.ID}}">{{.Name}}</a><div>{{.Position}}{{if ge $t.ID 0}} · {{$t.Long}}{{end}}</div></div></div>{{end}}</div>{{end}}
+{{if and .Q (not .People) (not .TeamHits)}}<div class="card card-b muted">No results for “{{.Q}}”.</div>{{end}}
+{{end}}

@@ -1,0 +1,26 @@
+{{define "title"}}{{.T.Long}} Roster{{end}}
+{{define "content"}}
+{{template "teamhead" .}}
+<p class="muted small">{{.Count}} players on the {{year .C .Season}} roster.</p>
+{{range .Groups}}{{if .Players}}
+<div class="card">
+  <h2>{{.Name}}</h2>
+  <div class="tbl-wrap"><table class="tbl">
+    <thead><tr><th class="l">Name</th><th class="l">POS</th><th class="l">#</th><th class="l">HT</th><th class="l">WT</th><th class="l">Class</th><th class="l">Hometown</th><th class="l">Recruit</th></tr></thead>
+    <tbody>{{range .Players}}
+      <tr><td><span class="tm"><img src="{{portrait .Portrait}}" alt="" loading="lazy" style="width:32px;height:32px;border-radius:50%;object-fit:cover;object-position:top;background:#f2f2f2"><a href="/player/{{.ID}}">{{.Name}}</a>{{if .Captain}}<span class="sub" title="Team captain">C</span>{{end}}{{if and .Injury (ne .Injury "Uninjured")}}<span class="sub loss" title="{{pretty .Injury}}">INJ</span>{{end}}</span></td>
+        <td class="l">{{.Position}}</td><td class="l">{{.Jersey}}</td><td class="l">{{height .Height}}</td><td class="l">{{.Weight}} lbs</td><td class="l">{{classYr .ClassYear .Redshirt}}</td><td class="l">{{.HomeTown}}, {{.HomeState}}</td><td class="l stars">{{stars .Stars}}</td></tr>
+    {{end}}</tbody>
+  </table></div>
+</div>
+{{end}}{{end}}
+{{with .Depth}}
+<div class="card">
+  <h2>Depth Chart</h2>
+  <div class="tbl-wrap"><table class="tbl">
+    <thead><tr><th class="l">Pos</th><th class="l">Starter</th><th class="l">2nd</th><th class="l">3rd</th></tr></thead>
+    <tbody>{{range .}}<tr><td><b>{{.Position}}</b></td>{{range .Players}}<td class="l"><a href="/player/{{.ID}}">{{.Name}}</a></td>{{end}}</tr>{{end}}</tbody>
+  </table></div>
+</div>
+{{end}}
+{{end}}

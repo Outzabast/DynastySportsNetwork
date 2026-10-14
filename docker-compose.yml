@@ -1,0 +1,15 @@
+# Local development database. Credentials are dev-only defaults; override via env.
+services:
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: dsn
+      POSTGRES_PASSWORD: dsn
+      POSTGRES_DB: dsn
+    ports:
+      - "5433:5432"
+    volumes:
+      - dsn-pg:/var/lib/postgresql/data
+    restart: unless-stopped
+volumes:
+  dsn-pg:

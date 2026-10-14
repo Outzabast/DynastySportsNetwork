@@ -1,0 +1,20 @@
+{{define "title"}}Standings{{end}}
+{{define "content"}}
+<h1 class="page-title">{{year .C .Season}} College Football Standings</h1>
+<form class="filters" method="get"><select name="season" onchange="this.form.submit()">
+  {{$sel := .Season}}{{$c := .C}}{{range .C.Seasons}}<option value="{{year $c .}}" {{if eq . $sel}}selected{{end}}>{{year $c .}}</option>{{end}}
+</select></form>
+<div class="grid g-half">
+{{range .Standings}}
+  <div class="card">
+    <h2><span class="tm">{{with confLogo .Conference}}<img src="{{.}}" alt="">{{end}}{{.Conference}}</span></h2>
+    <div class="tbl-wrap"><table class="tbl">
+      <thead><tr><th class="l">Team</th><th>Conf</th><th>Over</th><th>Strk</th><th title="AP rank">AP</th></tr></thead>
+      <tbody>{{range .Teams}}
+        <tr><td><span class="tm">{{template "teamlogo" .}}<a href="{{teamURL .}}">{{.Name}}</a></span></td><td>{{.ConfRecord}}</td><td>{{.Record}}</td><td>{{streak .Streak}}</td><td>{{if and .AP (le .AP 25)}}{{.AP}}{{else}}-{{end}}</td></tr>
+      {{end}}</tbody>
+    </table></div>
+  </div>
+{{else}}<div class="card card-b muted">No standings for this season.</div>{{end}}
+</div>
+{{end}}

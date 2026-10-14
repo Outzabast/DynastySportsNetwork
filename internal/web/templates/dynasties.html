@@ -1,0 +1,14 @@
+{{define "title"}}Dynasties{{end}}
+{{define "content"}}
+<h1 class="page-title">Your Dynasties</h1>
+<p class="muted">Each dynasty is tracked separately. Pick one to browse; the site remembers your choice.</p>
+<div class="card">
+  {{range .Dynasties}}
+  <div class="ldr">
+    <div class="who"><a href="/dynasty/{{.ID}}" style="font-size:16px">{{.Name}}</a>
+      <div>{{if .Coach}}Coach {{.Coach}} · {{end}}{{if .Year}}{{.Year}} season · {{end}}{{.Snapshots}} saves recorded{{with .LastSave}} · last played {{.Format "Jan 2, 2006 3:04 PM"}}{{end}}</div></div>
+    {{if eq .ID $.C.Dynasty}}<span class="pill on">Viewing</span>{{else}}<a class="pill" href="/dynasty/{{.ID}}">Switch</a>{{end}}
+  </div>
+  {{end}}
+</div>
+{{end}}

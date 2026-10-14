@@ -1,0 +1,65 @@
+{{define "title"}}{{.P.Name}}{{end}}
+{{define "content"}}
+{{$p := .P}}{{$team := .Team}}
+<div class="clubwrap">
+  <div class="hero-band" style="background: {{color $team.Color}}"></div>
+  <div class="player-head">
+    <img class="hs" src="{{portrait $p.Portrait}}" alt="">
+    <div style="padding-bottom:16px">
+      <h1>{{$p.First}} <b>{{$p.Last}}</b></h1>
+      <div class="sub">
+        {{if ge $team.ID 0}}{{template "teamlogo" $team}}<a href="{{teamURL $team}}">{{$team.Long}} {{$team.Nick}}</a> ·{{end}}
+        {{if $p.Jersey}}#{{$p.Jersey}} ·{{end}} {{position $p.Position}}
+        {{if not $p.OnRoster}}<span class="pill">Not on a current roster</span>{{end}}
+      </div>
+    </div>
+  </div>
+  <dl class="bio">
+    <div><dt>Class</dt><dd>{{classYr $p.ClassYear $p.Redshirt}}{{if not $p.ClassYear}}-{{end}}</dd></div>
+    <div><dt>HT/WT</dt><dd>{{height $p.Height}}, {{$p.Weight}} lbs</dd></div>
+    <div><dt>Hometown</dt><dd>{{$p.HomeTown}}, {{$p.HomeState}}</dd></div>
+    {{if $p.Stars}}<div><dt>Recruiting</dt><dd class="stars">{{stars $p.Stars}}</dd></div>{{end}}
+    {{if and $p.Injury (ne $p.Injury "Uninjured")}}<div><dt>Status</dt><dd class="loss">{{pretty $p.Injury}}</dd></div>{{end}}
+    {{if $p.Captain}}<div><dt>Role</dt><dd>Team Captain</dd></div>{{end}}
+  </dl>
+</div>
+
+<div class="grid g-2">
+  <div>
+    {{if .Tables}}
+      <h2 class="page-title" style="font-size:20px">Season Stats</h2>
+      {{range .Tables}}{{template "stattable" .}}{{end}}
+    {{else}}<div class="card card-b muted">No season stats recorded yet.</div>{{end}}
+
+    {{with .LogTables}}
+      <h2 class="page-title" style="font-size:20px">{{$.LogYear}} Game Log</h2>
+      {{range .}}{{template "stattable" .}}{{end}}
+    {{end}}
+
+    {{with .Raw.Rows}}
+    <div class="card">
+      <h2>Every Recorded Stat</h2>
+      <div class="tbl-wrap"><table class="tbl">
+        <thead><tr><th class="l">Category</th><th class="l">Stat</th>{{range $.Raw.Years}}<th>{{.}}</th>{{end}}</tr></thead>
+        <tbody>{{range .}}<tr><td class="muted">{{.Group}}</td><td class="l">{{.Label}}</td>{{range .Values}}<td>{{.}}</td>{{end}}</tr>{{end}}</tbody>
+      </table></div>
+    </div>
+    {{end}}
+  </div>
+  <div>
+    {{with .Awards}}
+    <div class="card">
+      <h2>Awards &amp; Honors</h2>
+      {{range .}}<div class="award">{{with trophy .Type}}<img class="tr" src="{{.}}" alt="">{{end}}
+        <div><div class="w">{{awardName .Type}}</div><div class="an">{{if eq .Period "Season"}}{{year $.C .PeriodIndex}}{{else}}Week {{.PeriodIndex}}{{end}}</div></div></div>{{end}}
+    </div>
+    {{end}}
+    {{with .Events}}
+    <div class="card">
+      <h2>Transactions</h2>
+      {{range .}}<div class="rank-row"><span class="t">{{if eq .Kind "position_change"}}Moved from {{index .Detail "from"}} to {{index .Detail "to"}}{{else if eq .Kind "leaving"}}Leaving program: {{leave (printf "%v" (index .Detail "type"))}}{{else}}{{pretty .Kind}}{{end}}</span><span class="r">{{year $.C .Season}}</span></div>{{end}}
+    </div>
+    {{end}}
+  </div>
+</div>
+{{end}}

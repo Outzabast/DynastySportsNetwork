@@ -1,0 +1,44 @@
+{{define "title"}}Data Status{{end}}
+{{define "content"}}
+<h1 class="page-title">Data Status</h1>
+<div class="grid g-half">
+  <div class="card">
+    <h2>Save Watcher</h2>
+    <div class="card-b small">
+      <div>Watching: <code>{{.SavesDir}}</code></div>
+      {{with .Status}}
+      <div>Last scan: {{.LastScan.Format "Jan 2 15:04:05"}}</div>
+      <div>Last ingest: {{if .LastFile}}{{.LastFile}} at {{.LastIngest.Format "Jan 2 15:04:05"}}{{else}}none this session{{end}}</div>
+      <div>Ingested this session: {{.Ingested}}</div>
+      {{with .LastError}}<div class="loss">Last error: {{.}}</div>{{end}}
+      {{end}}
+    </div>
+  </div>
+  <div class="card">
+    <h2>{{.C.Name}} Dynasty</h2>
+    <div class="card-b small">
+      <div>League ID: {{.C.LeagueID}} · active branch {{.C.Branch}}</div>
+      {{range $k, $v := .A.Counts}}<div>{{$k}}: {{$v}}</div>{{end}}
+      {{with .NoLogo}}<div class="loss">Teams without a logo match: {{range .}}{{.}} {{end}}</div>{{end}}
+    </div>
+  </div>
+</div>
+<div class="card">
+  <h2>Snapshots (latest 50)</h2>
+  <div class="tbl-wrap"><table class="tbl">
+    <thead><tr><th class="l">#</th><th class="l">Branch</th><th class="l">Season</th><th class="l">Stage</th><th class="l">Week</th><th class="l">Save</th><th class="l">SHA-256</th><th class="l">Ingested</th></tr></thead>
+    <tbody>{{range .A.Snapshots}}<tr><td>{{.ID}}</td><td class="l">{{.Branch}}</td><td class="l">{{.Year}}</td><td class="l">{{pretty .Stage}}</td><td class="l">{{weekLabel .WeekType .Week}}</td><td class="l">{{.Save}}</td><td class="l"><code>{{until .SHA 12}}</code></td><td class="l">{{.Ingested.Format "Jan 2 15:04"}}</td></tr>{{end}}</tbody>
+  </table></div>
+</div>
+<div class="grid g-half">
+  <div class="card">
+    <h2>Branches</h2>
+    <table class="tbl"><thead><tr><th class="l">#</th><th class="l">Parent</th><th class="l">Status</th><th class="l">Created</th></tr></thead>
+      <tbody>{{range .A.Branches}}<tr><td>{{.ID}}</td><td class="l">{{if .Parent}}{{.Parent}}{{else}}-{{end}}</td><td class="l {{if eq .Status "active"}}win{{end}}">{{.Status}}</td><td class="l">{{.Created.Format "Jan 2 15:04"}}</td></tr>{{end}}</tbody></table>
+  </div>
+  <div class="card">
+    <h2>Review Flags</h2>
+    {{range .A.Flags}}<div class="rank-row"><b>{{.Kind}}</b><span class="t small" style="font-weight:400"><code>{{until .Detail 160}}</code></span><span class="r">{{.Created.Format "Jan 2 15:04"}}</span></div>{{else}}<div class="card-b muted">Nothing to review.</div>{{end}}
+  </div>
+</div>
+{{end}}

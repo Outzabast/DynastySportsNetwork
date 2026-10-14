@@ -1,0 +1,16 @@
+{{define "title"}}{{.Table.Name}} Stats{{end}}
+{{define "content"}}
+<h1 class="page-title">{{year .C .Season}} {{.Table.Name}} Stats</h1>
+<form class="filters" method="get">
+  <input type="hidden" name="cat" value="{{.Cat}}">
+  <select name="season" onchange="this.form.submit()">{{$sel := .Season}}{{$c := .C}}{{range .C.Seasons}}<option value="{{year $c .}}" {{if eq . $sel}}selected{{end}}>{{year $c .}}</option>{{end}}</select>
+  <select name="conf" onchange="this.form.submit()"><option value="">All FBS</option>{{$conf := .Conf}}{{range .Confs}}<option {{if eq . $conf}}selected{{end}}>{{.}}</option>{{end}}</select>
+</form>
+<div class="filters">{{range .Tables}}<a class="pill {{if eq .ID $.Cat}}on{{end}}" href="/stats?cat={{.ID}}&season={{year $.C $.Season}}&conf={{$.Conf}}">{{.Name}}</a>{{end}}</div>
+<div class="card">
+  <div class="tbl-wrap"><table class="tbl">
+    <thead><tr><th class="l">RK</th><th class="l">Name</th>{{range $i, $h := .Table.Headers}}<th title="{{$h.Title}}" class="{{if eq $i $.Sort}}sorted{{end}}"><a href="/stats?cat={{$.Cat}}&season={{year $.C $.Season}}&conf={{$.Conf}}&sort={{$i}}">{{$h.Key}}</a></th>{{end}}</tr></thead>
+    <tbody>{{range $i, $r := .Table.Rows}}<tr><td>{{add $i 1}}</td><td class="l"><a href="{{$r.Href}}">{{$r.Label}}</a><span class="sub">{{$r.Sub}}</span></td>{{range $r.Cells}}<td>{{.}}</td>{{end}}</tr>{{end}}</tbody>
+  </table></div>
+</div>
+{{end}}

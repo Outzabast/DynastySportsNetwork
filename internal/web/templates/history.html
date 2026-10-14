@@ -1,0 +1,23 @@
+{{define "title"}}History{{end}}
+{{define "content"}}
+<h1 class="page-title">Dynasty History</h1>
+{{$teams := .Teams}}
+<div class="grid g-half">
+  <div class="card">
+    <h2>Conference Championship Games</h2>
+    <div class="tbl-wrap"><table class="tbl">
+      <thead><tr><th class="l">Conference</th><th class="l">Champion</th><th class="l">Runner-up</th><th>Score</th><th class="l">Coach</th></tr></thead>
+      <tbody>{{range .Champs}}<tr><td><span class="tm">{{with confLogo .Conference}}<img src="{{.}}" alt="">{{end}}{{.Conference}}</span></td>
+        <td class="l">{{with .WR}}{{if le . 25}}<span class="rk">{{.}}</span>{{end}}{{end}}<b>{{.Winner}}</b></td><td class="l">{{.Loser}}</td><td>{{.WS}}-{{.LS}}</td><td class="l">{{.Coach}}</td></tr>{{end}}</tbody>
+    </table></div>
+  </div>
+  <div class="card">
+    <h2>Rivalry Series</h2>
+    <div class="tbl-wrap"><table class="tbl">
+      <thead><tr><th class="l">Rivalry</th><th class="l">Series</th><th class="l">Streak</th></tr></thead>
+      <tbody>{{range .Rivalries}}{{$a := team $teams .Team1}}{{$b := team $teams .Team2}}<tr><td>{{.Name}}</td>
+        <td class="l">{{$a.Short}} {{.W1}} – {{.W2}} {{$b.Short}}</td><td class="l">{{if .StreakLen}}{{(team $teams .StreakTeam).Short}} {{.StreakLen}}{{end}}</td></tr>{{end}}</tbody>
+    </table></div>
+  </div>
+</div>
+{{end}}

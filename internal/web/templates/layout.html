@@ -1,0 +1,48 @@
+{{define "layout"}}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>{{block "title" .}}College Football{{end}}{{with .C}} - {{.Name}} Dynasty{{end}} - DSN</title>
+<link rel="stylesheet" href="/static/site.css?v={{assetVersion}}">
+</head>
+<body>
+<header class="gnav">
+  <div class="gnav-in">
+    <a class="brand" href="/"><span><b>D</b>SN</span><small>College Football</small></a>
+    <nav>
+      <a href="/" {{if eq .Path "/"}}class="on"{{end}}>Home</a>
+      <a href="/scoreboard" {{if eq .Path "/scoreboard"}}class="on"{{end}}>Scores</a>
+      <a href="/standings" {{if eq .Path "/standings"}}class="on"{{end}}>Standings</a>
+      <a href="/rankings" {{if eq .Path "/rankings"}}class="on"{{end}}>Rankings</a>
+      <a href="/stats" {{if eq .Path "/stats"}}class="on"{{end}}>Stats</a>
+      <a href="/teams" {{if eq .Path "/teams"}}class="on"{{end}}>Teams</a>
+      <a href="/awards" {{if eq .Path "/awards"}}class="on"{{end}}>Awards</a>
+      <a href="/recruiting" {{if eq .Path "/recruiting"}}class="on"{{end}}>Recruiting</a>
+      <a href="/records" {{if eq .Path "/records"}}class="on"{{end}}>Records</a>
+      <a href="/history" {{if eq .Path "/history"}}class="on"{{end}}>History</a>
+    </nav>
+    {{with .C}}<a class="dyn-switch" href="/dynasties" title="Switch dynasty">{{.Name}} · {{.Year}} ▾</a>{{end}}
+    <form class="gsearch" action="/search"><input name="q" placeholder="Search players & teams" aria-label="Search"></form>
+  </div>
+</header>
+{{with .Ticker}}
+<div class="ticker"><div class="ticker-in">
+  {{with index . 0}}<div class="tk-label">NCAAF<span>{{weekShort .G.WeekType .G.Week}}</span></div>{{end}}
+  {{range .}}{{template "tick" .}}{{end}}
+</div></div>
+{{end}}
+<main class="wrap">{{template "content" .}}</main>
+<footer class="footer">
+  {{with .C}}{{.Name}} dynasty · {{.Year}} {{pretty .Stage}} · week {{.Week}} · updated from <code>{{.SaveName}}</code> · {{.Snapshots}} saves recorded · <a href="/admin">Data status</a>{{end}}
+</footer>
+<div id="toast" class="toast" hidden><span>A new save was detected and the site has been updated.</span><button onclick="location.reload()">Refresh</button></div>
+<script>
+(function () {
+  if (!window.EventSource) return;
+  var es = new EventSource('/events');
+  es.addEventListener('snapshot', function () { document.getElementById('toast').hidden = false; });
+})();
+</script>
+</body>
+</html>{{end}}

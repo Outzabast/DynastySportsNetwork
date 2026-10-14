@@ -1,0 +1,84 @@
+{{define "teamlogo"}}{{if logo .}}<img src="{{logo .}}" alt="" loading="lazy">{{else}}<span class="teambadge" style="background: {{color .Color}}">{{until .Short 4}}</span>{{end}}{{end}}
+
+{{define "tick"}}
+<a class="tk" href="/game/{{.Year}}/{{.G.Row}}">
+  <div class="tk-status">{{status .G}}{{if not .G.Played}} · {{.G.Network}}{{end}}</div>
+  <div class="tk-row {{if and .G.Played (not (winner .G false))}}lose{{end}}">{{template "teamlogo" .Away}}<span class="nm">{{with rankOf .Away}}<span class="rk">{{.}}</span> {{end}}{{.Away.Short}}</span><span>{{if .G.Played}}{{.G.AwayScore}}{{else}}{{.Away.Record}}{{end}}</span></div>
+  <div class="tk-row {{if and .G.Played (not (winner .G true))}}lose{{end}}">{{template "teamlogo" .Home}}<span class="nm">{{with rankOf .Home}}<span class="rk">{{.}}</span> {{end}}{{.Home.Short}}</span><span>{{if .G.Played}}{{.G.HomeScore}}{{else}}{{.Home.Record}}{{end}}</span></div>
+</a>
+{{end}}
+
+{{define "sbteam"}}{{/* . = dict-like: T, Score, Lose, G */}}{{end}}
+
+{{define "gamecard"}}
+<div class="sb">
+  <div class="sb-top"><span class="{{if .G.Played}}live{{end}}">{{status .G}}</span><span>{{if not .G.Played}}{{.G.Network}}{{else}}{{weekShort .G.WeekType .G.Week}}{{end}}</span></div>
+  {{if .G.BowlName}}<div class="sb-bowl">{{with bowlLogo .G.BowlName}}<img src="{{.}}" alt="">{{end}}{{.G.BowlName}}</div>{{end}}
+  <div class="sb-team {{if and .G.Played (not (winner .G false))}}lose{{end}}">
+    {{template "teamlogo" .Away}}
+    <div class="nm">{{with rankOf .Away}}<span class="rk">{{.}}</span>{{end}} {{if teamURL .Away}}<a href="{{teamURL .Away}}">{{.Away.Name}}</a>{{else}}<a>{{.Away.Name}}</a>{{end}}<small>({{.Away.Record}}{{if .Away.Conference}}, {{.Away.ConfRecord}} {{.Away.Conference}}{{end}})</small></div>
+    {{if .G.Played}}<div class="sc">{{.G.AwayScore}}</div>{{end}}
+  </div>
+  <div class="sb-team {{if and .G.Played (not (winner .G true))}}lose{{end}}">
+    {{template "teamlogo" .Home}}
+    <div class="nm">{{with rankOf .Home}}<span class="rk">{{.}}</span>{{end}} {{if teamURL .Home}}<a href="{{teamURL .Home}}">{{.Home.Name}}</a>{{else}}<a>{{.Home.Name}}</a>{{end}}<small>({{.Home.Record}}{{if .Home.Conference}}, {{.Home.ConfRecord}} {{.Home.Conference}}{{end}})</small></div>
+    {{if .G.Played}}<div class="sc">{{.G.HomeScore}}</div>{{end}}
+  </div>
+  {{with .Leaders}}<div class="sb-lead">{{range .}}<div>{{.}}</div>{{end}}</div>{{end}}
+  <div class="sb-foot">
+    <a href="/game/{{.Year}}/{{.G.Row}}">{{if .G.Played}}Box Score{{else}}Preview{{end}}</a>
+    {{if .G.Stadium}}<span class="muted">{{.G.Stadium}}</span>{{end}}
+  </div>
+</div>
+{{end}}
+
+{{define "stattable"}}
+<div class="card">
+  <h2>{{.Name}}</h2>
+  <div class="tbl-wrap"><table class="tbl">
+    <thead><tr><th class="l"></th>{{range .Headers}}<th title="{{.Title}}">{{.Key}}</th>{{end}}</tr></thead>
+    <tbody>
+    {{range .Rows}}<tr><td>{{if .Href}}<a href="{{.Href}}">{{.Label}}</a>{{else}}{{.Label}}{{end}}{{with .Sub}}<span class="sub">{{.}}</span>{{end}}</td>{{range .Cells}}<td>{{.}}</td>{{end}}</tr>{{end}}
+    {{with .Total}}<tr class="total"><td>{{.Label}}</td>{{range .Cells}}<td>{{.}}</td>{{end}}</tr>{{end}}
+    </tbody>
+  </table></div>
+</div>
+{{end}}
+
+{{define "teamhead"}}
+<div class="clubwrap">
+  <div class="clubhead" style="background: linear-gradient(90deg, {{color .T.Color}} 0%, {{color .T.Color}} 60%, {{color .T.AltColor}} 140%)">
+    <div class="clubhead-in">
+      {{with logo .T}}<img class="logo" src="{{.}}" alt="">{{end}}
+      <div>
+        <h1>{{with rankOf .T}}<span style="opacity:.8">#{{.}}</span> {{end}}{{.T.Long}} <small>{{.T.Nick}}</small></h1>
+        <div class="meta">
+          <span>{{.T.Record}}</span>
+          {{if .T.Conference}}<span>{{.T.ConfRecord}} {{.T.Conference}}{{if .T.ConfStanding}} · {{ordinal .T.ConfStanding}}{{end}}</span>{{end}}
+          {{if .T.Streak}}<span>Streak {{streak .T.Streak}}</span>{{end}}
+          <span>{{year .C .Season}} season</span>
+        </div>
+      </div>
+      {{with helmet .T}}<img class="helmet" src="{{.}}" alt="">{{end}}
+    </div>
+  </div>
+  <div class="tabs">
+    <a href="/team/{{.T.ID}}?season={{year .C .Season}}" class="{{if eq .Tab "home"}}on{{end}}">Home</a>
+    <a href="/team/{{.T.ID}}/schedule?season={{year .C .Season}}" class="{{if eq .Tab "schedule"}}on{{end}}">Schedule</a>
+    <a href="/team/{{.T.ID}}/roster?season={{year .C .Season}}" class="{{if eq .Tab "roster"}}on{{end}}">Roster</a>
+    <a href="/team/{{.T.ID}}/stats?season={{year .C .Season}}" class="{{if eq .Tab "stats"}}on{{end}}">Stats</a>
+    <a href="/recruiting?team={{.T.ID}}&season={{year .C .Season}}">Recruiting</a>
+    <a href="/records?scope=team&name={{.T.Long}}">Records</a>
+  </div>
+</div>
+{{end}}
+
+{{define "seasonpick"}}
+<form class="filters" method="get">
+  {{range $k, $v := .Keep}}<input type="hidden" name="{{$k}}" value="{{$v}}">{{end}}
+  <select name="season" onchange="this.form.submit()">
+    {{$sel := .Season}}{{$c := .C}}
+    {{range .C.Seasons}}<option value="{{year $c .}}" {{if eq . $sel}}selected{{end}}>{{year $c .}} Season</option>{{end}}
+  </select>
+</form>
+{{end}}

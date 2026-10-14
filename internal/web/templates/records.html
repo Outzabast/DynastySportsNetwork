@@ -1,0 +1,21 @@
+{{define "title"}}Record Book{{end}}
+{{define "content"}}
+<h1 class="page-title">Record Book</h1>
+<form class="filters" method="get">
+  <select name="scope" onchange="this.form.name.value=''; this.form.submit()">
+    <option value="league" {{if eq .Scope "league"}}selected{{end}}>FBS</option>
+    <option value="conference" {{if eq .Scope "conference"}}selected{{end}}>Conference</option>
+    <option value="team" {{if eq .Scope "team"}}selected{{end}}>Team</option>
+  </select>
+  {{if .Names}}<select name="name" onchange="this.form.submit()"><option value="">Choose…</option>{{$n := .Name}}{{range .Names}}<option {{if eq . $n}}selected{{end}}>{{.}}</option>{{end}}</select>{{else}}<input type="hidden" name="name" value="">{{end}}
+</form>
+<div class="grid g-half">
+{{range .Boards}}
+  <div class="card">
+    <h2>{{pretty .Stat}} <span class="muted small">{{.Period}}</span></h2>
+    <table class="tbl"><thead><tr><th class="l">#</th><th class="l">Player</th><th class="l">Team</th><th>Year</th><th>Value</th></tr></thead>
+      <tbody>{{range .Entries}}<tr><td>{{.Rank}}</td><td class="l">{{.First}} {{.Last}}<span class="sub">{{.Position}}</span>{{if and (ne $.Scope "league") (eq $.Name "")}}<span class="sub">{{.ScopeName}}</span>{{end}}</td><td class="l">{{.Team}}</td><td>{{if .Year}}{{.Year}}{{end}}</td><td><b>{{.Value}}</b></td></tr>{{end}}</tbody></table>
+  </div>
+{{else}}<div class="card card-b muted">Pick a {{.Scope}} to see its records.</div>{{end}}
+</div>
+{{end}}

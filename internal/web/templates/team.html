@@ -1,0 +1,80 @@
+{{define "title"}}{{.T.Long}} {{.T.Nick}}{{end}}
+{{define "content"}}
+{{template "teamhead" .}}
+{{$t := .T}}{{$teams := .Teams}}
+<div class="grid g-2">
+  <div>
+    {{with .Leaders}}
+    <div class="card">
+      <h2>Team Leaders <a href="/team/{{$t.ID}}/stats">Full stats</a></h2>
+      <div class="ldr-grid" style="gap:0">
+      {{range $lb := .}}{{range .Entries}}
+        <div class="ldr"><img class="hs" src="{{portrait .Player.Portrait}}" alt="" loading="lazy">
+          <div class="who"><div style="text-transform:uppercase;font-weight:700">{{$lb.Name}}</div><a href="/player/{{.Player.ID}}">{{.Player.Name}}</a><div>{{.Player.Position}}</div></div>
+          <span class="val">{{.Value}}</span></div>
+      {{end}}{{end}}
+      </div>
+    </div>
+    {{end}}
+
+    <div class="card">
+      <h2>Schedule <a href="/team/{{$t.ID}}/schedule?season={{year .C .Season}}">Full schedule</a></h2>
+      <div class="tbl-wrap"><table class="tbl">
+        <thead><tr><th class="l">Date</th><th class="l">Opponent</th><th class="l">Result</th></tr></thead>
+        <tbody>{{range .Schedule}}{{$home := eq .G.Home $t.ID}}{{$opp := .Away}}{{if not $home}}{{$opp = .Home}}{{end}}
+          <tr><td>{{dateLabel .G .Year}}</td>
+            <td class="l"><span class="tm">{{if $home}}vs{{else}}@{{end}} {{template "teamlogo" $opp}}{{with rankOf $opp}}<span class="rk">{{.}}</span>{{end}}{{if teamURL $opp}}<a href="{{teamURL $opp}}">{{$opp.Name}}</a>{{else}}{{$opp.Name}}{{end}}</span>{{with .G.BowlName}}<span class="sub">{{.}}</span>{{end}}</td>
+            <td class="l">{{if .G.Played}}<a class="{{if isWin .G $t.ID}}win{{else}}loss{{end}}" href="/game/{{.Year}}/{{.G.Row}}">{{result .G $t.ID}}</a>{{else}}<span class="muted">{{status .G}}</span>{{end}}</td></tr>
+        {{end}}</tbody>
+      </table></div>
+    </div>
+
+    {{with .Recruits}}
+    <div class="card">
+      <h2>Recruiting Class</h2>
+      <div class="tbl-wrap"><table class="tbl">
+        <thead><tr><th class="l">Name</th><th class="l">Pos</th><th class="l">Hometown</th><th class="l">Rating</th><th>Natl</th></tr></thead>
+        <tbody>{{range .}}<tr><td><a href="/player/{{.ID}}">{{.Name}}</a></td><td class="l">{{.Position}}</td><td class="l">{{.HomeTown}}, {{.HomeState}}</td><td class="l stars">{{stars .Stars}}</td><td>{{if .National}}{{.National}}{{else}}-{{end}}</td></tr>{{end}}</tbody>
+      </table></div>
+    </div>
+    {{end}}
+  </div>
+
+  <div>
+    {{with .Conf}}
+    <div class="card">
+      <h2>{{.Conference}} Standings</h2>
+      <table class="tbl"><thead><tr><th class="l">Team</th><th>Conf</th><th>Over</th></tr></thead>
+        <tbody>{{range .Teams}}<tr><td><span class="tm">{{template "teamlogo" .}}<a href="{{teamURL .}}" {{if eq .ID $t.ID}}style="font-weight:700"{{end}}>{{.Name}}</a></span></td><td>{{.ConfRecord}}</td><td>{{.Record}}</td></tr>{{end}}</tbody></table>
+    </div>
+    {{end}}
+
+    {{with .Coaches}}
+    <div class="card">
+      <h2>Coaching Staff</h2>
+      {{range .}}
+      <div class="ldr"><img class="hs" src="{{coachPortrait .Asset}}" alt="" loading="lazy">
+        <div class="who"><b>{{.First}} {{.Last}}</b><div>{{pretty .Position}}{{if .Age}} · Age {{.Age}}{{end}}</div>
+          <div>Career {{.W}}-{{.L}}{{if or .SW .SL}} · At school {{.SW}}-{{.SL}}{{end}}{{if or .BowlW .BowlL}} · Bowls {{.BowlW}}-{{.BowlL}}{{end}}{{if .Conf}} · {{.Conf}} conf titles{{end}}{{if .Natl}} · {{.Natl}} national titles{{end}}</div></div></div>
+      {{end}}
+    </div>
+    {{end}}
+
+    {{with .Injuries}}
+    <div class="card">
+      <h2>Injuries</h2>
+      {{range .}}<div class="rank-row"><a class="t" href="/player/{{.Player.ID}}">{{.Player.Name}}</a><span class="r">{{pretty .Severity}}{{if .MaxWeeks}} ({{.MinWeeks}}-{{.MaxWeeks}} wks){{end}}</span></div>{{end}}
+    </div>
+    {{end}}
+
+    {{with .Rivalries}}
+    <div class="card">
+      <h2>Rivalries</h2>
+      {{range .}}{{$o := team $teams .Team2}}{{$w := .W1}}{{$l := .W2}}{{if eq .Team2 $t.ID}}{{$o = team $teams .Team1}}{{$w = .W2}}{{$l = .W1}}{{end}}
+      <div class="rank-row">{{template "teamlogo" $o}}<div class="t"><div>{{.Name}}</div><span class="muted small">vs {{$o.Name}}</span></div><span class="r">{{$w}}-{{$l}}</span></div>
+      {{end}}
+    </div>
+    {{end}}
+  </div>
+</div>
+{{end}}

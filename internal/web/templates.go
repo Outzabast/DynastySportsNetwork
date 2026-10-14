@@ -15,6 +15,15 @@ import (
 func (s *Site) funcs() template.FuncMap {
 	m := s.media
 	return template.FuncMap{
+		"inc": func(i int) int { return i + 1 },
+		// dict builds a map for passing several values to a sub-template.
+		"dict": func(kv ...any) map[string]any {
+			m := map[string]any{}
+			for i := 0; i+1 < len(kv); i += 2 {
+				m[kv[i].(string)] = kv[i+1]
+			}
+			return m
+		},
 		"logo": func(t *store.Team) string {
 			if t == nil || t.ID < 0 {
 				return ""

@@ -458,38 +458,44 @@ func (s *Site) game(r *http.Request, c *store.Ctx) (string, data, error) {
 	if err != nil {
 		return "", nil, err
 	}
-	box := func(team int) []RenderedTable {
-		var out []RenderedTable
-		for _, t := range boxTables {
-			rt := RenderedTable{ID: t.ID, Name: t.Name, Headers: t.Cols}
-			total := store.Stats{}
-			for _, l := range lines {
-				if l.TeamID != team || !t.groupOK(l.Group) || !t.Has(l.Stats) {
-					continue
-				}
-				total.Add(l.Stats)
-				row := Row{Label: l.Player.Short(), Href: "/player/" + l.Player.ID.String(), Sub: l.Player.Position, sortV: t.Cols[t.SortBy].Num(l.Stats)}
-				for _, col := range t.Cols {
-					row.Cells = append(row.Cells, col.Val(l.Stats))
-				}
-				rt.Rows = append(rt.Rows, row)
-			}
-			if len(rt.Rows) == 0 {
+	box := func(t Table, team int) *RenderedTable {
+		rt := &RenderedTable{ID: t.ID, Name: t.Name, Headers: t.Cols}
+		total := store.Stats{}
+		for _, l := range lines {
+			if l.TeamID != team || !t.groupOK(l.Group) || !t.Has(l.Stats) {
 				continue
 			}
-			sortRows(rt.Rows)
-			if len(rt.Rows) > 1 {
-				tr := Row{Label: "TEAM"}
-				for _, col := range t.Cols {
-					tr.Cells = append(tr.Cells, col.Val(total))
-				}
-				rt.Total = &tr
+			total.Add(l.Stats)
+			row := Row{Label: l.Player.Name(), Href: "/player/" + l.Player.ID.String(), sortV: t.Cols[t.SortBy].Num(l.Stats)}
+			if l.Player.Jersey > 0 {
+				row.Sub = fmt.Sprintf("#%d", l.Player.Jersey)
 			}
-			out = append(out, rt)
+			for _, col := range t.Cols {
+				row.Cells = append(row.Cells, col.Val(l.Stats))
+			}
+			rt.Rows = append(rt.Rows, row)
 		}
-		return out
+		sortRows(rt.Rows)
+		if len(rt.Rows) > 0 {
+			tr := Row{Label: "TEAM"}
+			for _, col := range t.Cols {
+				tr.Cells = append(tr.Cells, col.Val(total))
+			}
+			rt.Total = &tr
+		}
+		return rt
 	}
-	return "game", data{"G": g, "Away": away, "Home": home, "AwayBox": box(g.Away), "HomeBox": box(g.Home),
+	// ESPN layout: one row per category, away and home side by side. A
+	// category is shown when either team has an entry.
+	var boxCats []BoxCategory
+	for _, t := range boxTables {
+		a, h := box(t, g.Away), box(t, g.Home)
+		if len(a.Rows)+len(h.Rows) == 0 {
+			continue
+		}
+		boxCats = append(boxCats, BoxCategory{Name: t.Name, Away: a, Home: h})
+	}
+	return "game", data{"G": g, "Away": away, "Home": home, "Box": boxCats,
 		"TeamStats": teamBoxRows(g.AwayBox, g.HomeBox), "Scoring": scoringLines(g, plays, lines), "HasScoring": len(plays) > 0,
 		"Season": season, "Year": c.YearOf(season), "Quarters": quarterCols(g)}, nil
 }

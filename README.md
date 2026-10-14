@@ -63,7 +63,8 @@ it (or open `/dynasties`) to switch.
 
 ## Fonts
 
-ESPN's typefaces are licensed and are not bundled. The stylesheet uses the same
-Helvetica Neue/Arial fallback stack espn.com uses. To use licensed fonts, add them
-under `internal/web/static/fonts` and set `--font-head` / `--font-body` in
-`site.css`.
+The site uses espn.com's own typefaces from `media/fonts` (personal use):
+Benton Sans for body text, Benton Sans Cond for table headers and labels,
+Playoff Pro Cond for scores, ESPN Ignite Display for page titles, and Publico
+for feature headlines. They are registered in `internal/web/static/site.css`
+and mapped to the `--font-*` variables there.

@@ -95,7 +95,7 @@ Ordered by impact.
 9. **More ESPN surfaces:** conference pages, bowl/CFP bracket page, national
    champions list, coaching carousel/transfer portal tracker, draft results,
    team history (year-by-year records), head-to-head, player comparison.
-10. **Fonts and polish.** Licensed ESPN fonts are not bundled. Responsive
+10. **Polish.** ESPN fonts and the ESPN box score layout are in. Responsive
     passes, dark mode, and per-page images are still to do.
 
 ## Verification

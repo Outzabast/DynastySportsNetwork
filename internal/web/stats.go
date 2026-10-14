@@ -222,6 +222,12 @@ type RenderedTable struct {
 	Total    *Row
 }
 
+// BoxCategory is one box score category with both teams' tables.
+type BoxCategory struct {
+	Name       string
+	Away, Home *RenderedTable
+}
+
 // leaderStat is a leaderboard category.
 type leaderStat struct {
 	ID, Name, Short string

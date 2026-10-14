@@ -319,7 +319,7 @@ func (in *ingest) copyForward(ctx context.Context, from, to int, stored map[int]
 			return err
 		}
 	}
-	gameScoped := "season_index < $2 OR (season_index = $2 AND game_row = ANY($3))"
+	gameScoped := "season_index < $2 OR (season_index = $2 AND game_row = ANY($3::int[]))"
 	for _, t := range []string{"game", "player_game_stat", "scoring_play"} {
 		if err := copyBranchRows(ctx, in.tx, t, from, to, gameScoped, season, agree); err != nil {
 			return err
@@ -519,7 +519,7 @@ func (in *ingest) resolveIdentities(ctx context.Context) error {
 			}
 		}
 	}
-	if _, err := tx.Exec(ctx, `UPDATE person_alias SET last_snapshot = $1 WHERE id = ANY($2)`, in.snapID, keepIDs); err != nil {
+	if _, err := tx.Exec(ctx, `UPDATE person_alias SET last_snapshot = $1 WHERE id = ANY($2::int[])`, in.snapID, keepIDs); err != nil {
 		return err
 	}
 	if len(newPersons) > 0 {

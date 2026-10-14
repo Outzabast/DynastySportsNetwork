@@ -59,6 +59,13 @@ Supabase, Prisma Postgres, Railway, Render, or any plain Postgres 14+):
    `database host=...` so you can confirm which one it's using. The schema
    is created automatically on first connect.
 
+**Viewer-only machines** (e.g. a Mac with no game saves) need only Go and
+the same `.env`. No Docker. Run `go run ./cmd/dsn serve -no-watch`. Only the
+gaming PC should run the watcher.
+
+**Prisma Postgres:** use the direct host `db.prisma.io`, not
+`pooled.db.prisma.io`.
+
 A real `DSN_DB` environment variable or `-db` flag overrides `.env`, so
 `-db postgres://dsn:dsn@localhost:5433/dsn?sslmode=disable` gets you back to
 local Docker for a one-off.

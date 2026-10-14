@@ -549,7 +549,7 @@ func (q *Queries) PlayerRefs(ctx context.Context, c *Ctx, season int, ids map[uu
 	}
 	rows, err := q.s.DB.Query(ctx, `SELECT p.id, p.first_name, p.last_name, COALESCE(ps.position, ''), COALESCE(ps.jersey, 0), COALESCE(ps.team_id, -1), COALESCE(ps.portrait, ''), COALESCE(ps.school_year, '')
 		FROM person p LEFT JOIN LATERAL (SELECT * FROM player_season x WHERE x.branch_id = $1 AND x.person_id = p.id ORDER BY (x.season_index = $2) DESC, x.season_index DESC LIMIT 1) ps ON true
-		WHERE p.id = ANY($3)`, c.Branch, season, list)
+		WHERE p.id = ANY($3::uuid[])`, c.Branch, season, list)
 	if err != nil {
 		return nil, err
 	}
@@ -667,7 +667,7 @@ func (q *Queries) PlayerGameLog(ctx context.Context, c *Ctx, season int, person 
 		for _, k := range keys {
 			list = append(list, int32(k.row))
 		}
-		gr, err := q.s.DB.Query(ctx, `SELECT `+gameCols+` FROM game WHERE branch_id = $1 AND season_index = $2 AND game_row = ANY($3)`, c.Branch, season, list)
+		gr, err := q.s.DB.Query(ctx, `SELECT `+gameCols+` FROM game WHERE branch_id = $1 AND season_index = $2 AND game_row = ANY($3::int[])`, c.Branch, season, list)
 		if err != nil {
 			return nil, err
 		}

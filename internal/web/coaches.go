@@ -56,16 +56,17 @@ type CoachSeasonGames struct {
 func (s *Site) coach(r *http.Request, c *store.Ctx) (string, data, error) {
 	ctx := r.Context()
 	key := r.PathValue("key")
-	p, err := s.q.CoachProfile(ctx, c, key)
+	var p *store.CoachProfile
+	var teams map[int]*store.Team
+	err := parallel(
+		func() (err error) { p, err = s.q.CoachProfile(ctx, c, key); return },
+		func() (err error) { teams, err = s.q.Teams(ctx, c, c.Season); return },
+	)
 	if err != nil {
 		return "", nil, err
 	}
 	if p == nil {
 		return "", nil, errNotFound
-	}
-	teams, err := s.q.Teams(ctx, c, c.Season)
-	if err != nil {
-		return "", nil, err
 	}
 	var rows []StintRow
 	var hcW, hcL, bowlW, bowlL, cfpW, cfpL, confTitles int
@@ -96,15 +97,30 @@ func (s *Site) coach(r *http.Request, c *store.Ctx) (string, data, error) {
 	}
 
 	// Games coached: every captured season, the team's games in that role.
+	// One query for all of them, with each season's teams loaded alongside.
+	var list []store.TeamSeason
+	seen := map[store.TeamSeason]bool{}
+	var loads []func() error
+	for _, st := range p.Stints {
+		ts := store.TeamSeason{Season: st.Season, Team: st.TeamID}
+		if !st.Captured || seen[ts] {
+			continue
+		}
+		seen[ts] = true
+		list = append(list, ts)
+		loads = append(loads, func() error { _, err := s.q.Teams(ctx, c, st.Season); return err })
+	}
+	var byStint map[store.TeamSeason][]*store.Game
+	loads = append(loads, func() (err error) { byStint, err = s.q.GamesForTeamSeasonList(ctx, c, list); return })
+	if err := parallel(loads...); err != nil {
+		return "", nil, err
+	}
 	var logs []CoachSeasonGames
 	for _, st := range p.Stints {
 		if !st.Captured {
 			continue
 		}
-		games, err := s.q.GamesForTeamSeasons(ctx, c, st.TeamID, []int{st.Season})
-		if err != nil {
-			return "", nil, err
-		}
+		games := byStint[store.TeamSeason{Season: st.Season, Team: st.TeamID}]
 		cards, err := s.cards(ctx, c, st.Season, games, false)
 		if err != nil {
 			return "", nil, err
@@ -146,15 +162,16 @@ type HistoryRow struct {
 
 func (s *Site) teamHistory(r *http.Request, c *store.Ctx) (string, data, error) {
 	ctx := r.Context()
-	t, season, err := s.teamHeader(ctx, r, c)
-	if err != nil {
-		return "", nil, err
-	}
-	hist, err := s.q.TeamHistory(ctx, c, t.ID)
-	if err != nil {
-		return "", nil, err
-	}
-	staff, err := s.q.StaffHistory(ctx, c, t.ID)
+	var t *store.Team
+	var season int
+	var hist []*store.HistoryYear
+	var staff map[int]map[string]*store.Coach
+	id := atoi(r.PathValue("id"), -1)
+	err := parallel(
+		func() (err error) { t, season, err = s.teamHeader(ctx, r, c); return },
+		func() (err error) { hist, err = s.q.TeamHistory(ctx, c, id); return },
+		func() (err error) { staff, err = s.q.StaffHistory(ctx, c, id); return },
+	)
 	if err != nil {
 		return "", nil, err
 	}
@@ -211,11 +228,12 @@ type StaffRow struct {
 func (s *Site) coaches(r *http.Request, c *store.Ctx) (string, data, error) {
 	ctx := r.Context()
 	season := seasonParam(r, c)
-	teams, err := s.q.Teams(ctx, c, season)
-	if err != nil {
-		return "", nil, err
-	}
-	all, err := s.q.Coaches(ctx, c, season, -1)
+	var teams map[int]*store.Team
+	var all []*store.Coach
+	err := parallel(
+		func() (err error) { teams, err = s.q.Teams(ctx, c, season); return },
+		func() (err error) { all, err = s.q.Coaches(ctx, c, season, -1); return },
+	)
 	if err != nil {
 		return "", nil, err
 	}

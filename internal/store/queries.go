@@ -140,37 +140,39 @@ func (q *Queries) Context(ctx context.Context, dynasty int) (*Ctx, error) {
 	}
 	q.mu.Unlock()
 	c := &Ctx{}
-	err := q.s.DB.QueryRow(ctx, `SELECT d.id, d.league_id, d.base_year, d.name, b.id, s.season_index, s.year, s.week, s.week_type, s.stage, s.save_name, s.ingested_at
-		FROM snapshot s JOIN branch b ON b.id = s.branch_id AND b.status = 'active' JOIN dynasty d ON d.id = s.dynasty_id
-		WHERE ($1 = 0 OR d.id = $1)
-		ORDER BY d.last_save_at DESC NULLS LAST, s.pos DESC, s.id DESC LIMIT 1`, dynasty).Scan(&c.Dynasty, &c.LeagueID, &c.BaseYear, &c.Name, &c.Branch, &c.Season, &c.Year, &c.Week, &c.WeekType, &c.Stage, &c.SaveName, &c.LastUpdate)
+	// One round trip: the dynasty's newest snapshot on the active branch, then
+	// the latest position on that branch (a re-ingest of an old file must not
+	// move the site backwards), the seasons with data, and the snapshot count.
+	var seasons []int32
+	err := q.s.DB.QueryRow(ctx, `WITH cur AS (
+			SELECT d.id AS dynasty, d.league_id, d.base_year, d.name, b.id AS branch, s.season_index, s.year, s.week, s.week_type, s.stage, s.save_name, s.ingested_at
+			FROM snapshot s JOIN branch b ON b.id = s.branch_id AND b.status = 'active' JOIN dynasty d ON d.id = s.dynasty_id
+			WHERE ($1 = 0 OR d.id = $1)
+			ORDER BY d.last_save_at DESC NULLS LAST, s.pos DESC, s.id DESC LIMIT 1)
+		SELECT cur.dynasty, cur.league_id, cur.base_year, cur.name, cur.branch,
+			COALESCE(lat.season_index, cur.season_index), COALESCE(lat.year, cur.year), COALESCE(lat.week, cur.week), COALESCE(lat.week_type, cur.week_type),
+			COALESCE(lat.stage, cur.stage), COALESCE(lat.save_name, cur.save_name), cur.ingested_at,
+			ARRAY(SELECT season_index FROM player_season_stat WHERE branch_id = cur.branch
+				UNION SELECT season_index FROM game WHERE branch_id = cur.branch ORDER BY 1 DESC),
+			(SELECT count(*) FROM snapshot WHERE dynasty_id = cur.dynasty)
+		FROM cur LEFT JOIN LATERAL (SELECT season_index, year, week, week_type, stage, save_name FROM snapshot
+			WHERE branch_id = cur.branch ORDER BY pos DESC, id DESC LIMIT 1) lat ON true`, dynasty).
+		Scan(&c.Dynasty, &c.LeagueID, &c.BaseYear, &c.Name, &c.Branch, &c.Season, &c.Year, &c.Week, &c.WeekType, &c.Stage, &c.SaveName, &c.LastUpdate,
+			&seasons, &c.Snapshots)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNoData
 	}
 	if err != nil {
 		return nil, err
 	}
-	// Prefer the latest position on the active branch (a re-ingest of an old
-	// file must not move the site backwards).
-	_ = q.s.DB.QueryRow(ctx, `SELECT season_index, year, week, week_type, stage, save_name FROM snapshot WHERE branch_id = $1 ORDER BY pos DESC, id DESC LIMIT 1`, c.Branch).
-		Scan(&c.Season, &c.Year, &c.Week, &c.WeekType, &c.Stage, &c.SaveName)
 	if c.BaseYear == 0 {
 		c.BaseYear = c.Year - c.Season
 	}
-	rows, err := q.s.DB.Query(ctx, `SELECT DISTINCT season_index FROM player_season_stat WHERE branch_id = $1
-		UNION SELECT DISTINCT season_index FROM game WHERE branch_id = $1 ORDER BY 1 DESC`, c.Branch)
-	if err != nil {
-		return nil, err
-	}
-	for rows.Next() {
-		var s int
-		rows.Scan(&s)
+	for _, s := range seasons {
 		if s >= 0 {
-			c.Seasons = append(c.Seasons, s)
+			c.Seasons = append(c.Seasons, int(s))
 		}
 	}
-	rows.Close()
-	q.s.DB.QueryRow(ctx, `SELECT count(*) FROM snapshot WHERE dynasty_id = $1`, c.Dynasty).Scan(&c.Snapshots)
 	q.mu.Lock()
 	q.ctx[dynasty], q.at[dynasty] = c, time.Now()
 	q.mu.Unlock()
@@ -397,11 +399,22 @@ type WeekKey struct {
 	WeekType string
 	Week     int
 	Games    int
+	Played   int
+}
+
+// ID drops the counts, for use as a map key.
+func (w WeekKey) ID() WeekID { return WeekID{w.WeekType, w.Week} }
+
+// WeekID names one week of a season.
+type WeekID struct {
+	WeekType string
+	Week     int
 }
 
 // Weeks lists the weeks that have games in a season, in calendar order.
 func (q *Queries) Weeks(ctx context.Context, c *Ctx, season int) ([]WeekKey, error) {
-	rows, err := q.s.DB.Query(ctx, `SELECT week_type, week, count(*) FROM game WHERE branch_id = $1 AND season_index = $2 GROUP BY 1,2 ORDER BY 2, 1`, c.Branch, season)
+	rows, err := q.s.DB.Query(ctx, `SELECT week_type, week, count(*), count(*) FILTER (WHERE played) FROM game WHERE branch_id = $1 AND season_index = $2
+		GROUP BY 1,2 ORDER BY 2, 1`, c.Branch, season)
 	if err != nil {
 		return nil, err
 	}
@@ -409,10 +422,38 @@ func (q *Queries) Weeks(ctx context.Context, c *Ctx, season int) ([]WeekKey, err
 	var out []WeekKey
 	for rows.Next() {
 		var w WeekKey
-		rows.Scan(&w.WeekType, &w.Week, &w.Games)
+		rows.Scan(&w.WeekType, &w.Week, &w.Games, &w.Played)
 		out = append(out, w)
 	}
 	return out, rows.Err()
+}
+
+// GamesForWeeks returns several scoreboard weeks in one query, each in
+// GamesForWeek order.
+func (q *Queries) GamesForWeeks(ctx context.Context, c *Ctx, season int, weeks []WeekID) (map[WeekID][]*Game, error) {
+	out := map[WeekID][]*Game{}
+	if len(weeks) == 0 {
+		return out, nil
+	}
+	types, nums := make([]string, len(weeks)), make([]int32, len(weeks))
+	for i, w := range weeks {
+		types[i], nums[i] = w.WeekType, int32(w.Week)
+	}
+	rows, err := q.s.DB.Query(ctx, `SELECT `+gameCols+` FROM game WHERE branch_id = $1 AND season_index = $2
+		AND (week_type, week) IN (SELECT * FROM unnest($3::text[], $4::int[]))
+		ORDER BY game_of_week DESC, month, day, time_of_day, game_row`, c.Branch, season, types, nums)
+	if err != nil {
+		return nil, err
+	}
+	gs, err := scanGames(rows)
+	if err != nil {
+		return nil, err
+	}
+	for _, g := range gs {
+		k := WeekID{g.WeekType, g.Week}
+		out[k] = append(out[k], g)
+	}
+	return out, nil
 }
 
 // GamesForWeek returns a scoreboard week.
@@ -481,34 +522,53 @@ type Line struct {
 
 // GameLines returns every player line for a game, merged by display group.
 func (q *Queries) GameLines(ctx context.Context, c *Ctx, season, row int) ([]*Line, error) {
-	rows, err := q.s.DB.Query(ctx, `SELECT s.person_id, p.first_name, p.last_name, COALESCE(ps.position, ''), COALESCE(ps.jersey, 0), COALESCE(ps.portrait, ''),
+	m, err := q.GamesLines(ctx, c, season, []int{row})
+	return m[row], err
+}
+
+// GamesLines is GameLines for several games of a season in one query, keyed
+// by game row.
+func (q *Queries) GamesLines(ctx context.Context, c *Ctx, season int, games []int) (map[int][]*Line, error) {
+	out := map[int][]*Line{}
+	if len(games) == 0 {
+		return out, nil
+	}
+	list := make([]int32, len(games))
+	for i, g := range games {
+		list[i] = int32(g)
+	}
+	rows, err := q.s.DB.Query(ctx, `SELECT s.game_row, s.person_id, p.first_name, p.last_name, COALESCE(ps.position, ''), COALESCE(ps.jersey, 0), COALESCE(ps.portrait, ''),
 		s.team_id, s.category, s.stats
 		FROM player_game_stat s JOIN person p ON p.id = s.person_id
 		LEFT JOIN player_season ps ON ps.branch_id = s.branch_id AND ps.season_index = s.season_index AND ps.person_id = s.person_id
-		WHERE s.branch_id = $1 AND s.season_index = $2 AND s.game_row = $3`, c.Branch, season, row)
+		WHERE s.branch_id = $1 AND s.season_index = $2 AND s.game_row = ANY($3::int[])`, c.Branch, season, list)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	idx := map[string]*Line{}
-	var out []*Line
+	type key struct {
+		game  int
+		group string
+		id    uuid.UUID
+	}
+	idx := map[key]*Line{}
 	for rows.Next() {
 		var pr PlayerRef
-		var team int
+		var game, team int
 		var cat string
 		var raw []byte
-		if err := rows.Scan(&pr.ID, &pr.First, &pr.Last, &pr.Position, &pr.Jersey, &pr.Portrait, &team, &cat, &raw); err != nil {
+		if err := rows.Scan(&game, &pr.ID, &pr.First, &pr.Last, &pr.Position, &pr.Jersey, &pr.Portrait, &team, &cat, &raw); err != nil {
 			return nil, err
 		}
 		var st Stats
 		json.Unmarshal(raw, &st)
 		g := Group(cat)
-		k := pr.ID.String() + g
+		k := key{game, g, pr.ID}
 		l, ok := idx[k]
 		if !ok {
 			l = &Line{Player: pr, TeamID: team, Group: g, Stats: Stats{}}
 			idx[k] = l
-			out = append(out, l)
+			out[game] = append(out[game], l)
 		}
 		l.Stats.Add(st)
 	}
@@ -537,13 +597,20 @@ type Participant struct {
 
 // ScoringPlays returns the stored scoring summary for a game.
 func (q *Queries) ScoringPlays(ctx context.Context, c *Ctx, season, row int) ([]*ScoringPlay, error) {
-	rows, err := q.s.DB.Query(ctx, `SELECT seq, quarter, clock_sec, home_score, away_score, home_prev, away_prev, conversion, scoring_team, participants
+	// The plays and every participant's bio go in one batch (one round trip).
+	b := &pgx.Batch{}
+	b.Queue(`SELECT seq, quarter, clock_sec, home_score, away_score, home_prev, away_prev, conversion, scoring_team, participants
 		FROM scoring_play WHERE branch_id = $1 AND season_index = $2 AND game_row = $3 ORDER BY seq`, c.Branch, season, row)
+	b.Queue(playerRefSelect+`p.id IN (SELECT (e->>'personId')::uuid FROM scoring_play sp,
+		jsonb_array_elements(CASE WHEN jsonb_typeof(sp.participants) = 'array' THEN sp.participants ELSE '[]'::jsonb END) e
+		WHERE sp.branch_id = $1 AND sp.season_index = $2 AND sp.game_row = $3 AND e->>'personId' IS NOT NULL)`, c.Branch, season, row)
+	br := q.s.DB.SendBatch(ctx, b)
+	defer br.Close()
+	rows, err := br.Query()
 	if err != nil {
 		return nil, err
 	}
 	var out []*ScoringPlay
-	ids := map[uuid.UUID]bool{}
 	type rawPart struct {
 		PersonID *uuid.UUID `json:"personId"`
 		Stats    Stats      `json:"stats"`
@@ -558,16 +625,18 @@ func (q *Queries) ScoringPlays(ctx context.Context, c *Ctx, season, row int) ([]
 		}
 		var parts []rawPart
 		json.Unmarshal(raw, &parts)
-		for _, rp := range parts {
-			if rp.PersonID != nil {
-				ids[*rp.PersonID] = true
-			}
-		}
 		raws = append(raws, parts)
 		out = append(out, p)
 	}
 	rows.Close()
-	refs, err := q.PlayerRefs(ctx, c, season, ids)
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	refRows, err := br.Query()
+	if err != nil {
+		return nil, err
+	}
+	refs, err := scanPlayerRefs(refRows)
 	if err != nil {
 		return nil, err
 	}
@@ -583,23 +652,15 @@ func (q *Queries) ScoringPlays(ctx context.Context, c *Ctx, season, row int) ([]
 	return out, nil
 }
 
-// PlayerRefs resolves people with their bio for a season (latest otherwise).
-func (q *Queries) PlayerRefs(ctx context.Context, c *Ctx, season int, ids map[uuid.UUID]bool) (map[uuid.UUID]PlayerRef, error) {
-	list := make([]uuid.UUID, 0, len(ids))
-	for id := range ids {
-		list = append(list, id)
-	}
-	out := map[uuid.UUID]PlayerRef{}
-	if len(list) == 0 {
-		return out, nil
-	}
-	rows, err := q.s.DB.Query(ctx, `SELECT p.id, p.first_name, p.last_name, COALESCE(ps.position, ''), COALESCE(ps.jersey, 0), COALESCE(ps.team_id, -1), COALESCE(ps.portrait, ''), COALESCE(ps.school_year, '')
-		FROM person p LEFT JOIN LATERAL (SELECT * FROM player_season x WHERE x.branch_id = $1 AND x.person_id = p.id ORDER BY (x.season_index = $2) DESC, x.season_index DESC LIMIT 1) ps ON true
-		WHERE p.id = ANY($3::uuid[])`, c.Branch, season, list)
-	if err != nil {
-		return nil, err
-	}
+// playerRefSelect selects PlayerRefs with their bio for season $2 (latest
+// otherwise); append the WHERE condition.
+const playerRefSelect = `SELECT p.id, p.first_name, p.last_name, COALESCE(ps.position, ''), COALESCE(ps.jersey, 0), COALESCE(ps.team_id, -1), COALESCE(ps.portrait, ''), COALESCE(ps.school_year, '')
+	FROM person p LEFT JOIN LATERAL (SELECT * FROM player_season x WHERE x.branch_id = $1 AND x.person_id = p.id ORDER BY (x.season_index = $2) DESC, x.season_index DESC LIMIT 1) ps ON true
+	WHERE `
+
+func scanPlayerRefs(rows pgx.Rows) (map[uuid.UUID]PlayerRef, error) {
 	defer rows.Close()
+	out := map[uuid.UUID]PlayerRef{}
 	for rows.Next() {
 		var r PlayerRef
 		if err := rows.Scan(&r.ID, &r.First, &r.Last, &r.Position, &r.Jersey, &r.TeamID, &r.Portrait, &r.ClassYear); err != nil {
@@ -608,6 +669,22 @@ func (q *Queries) PlayerRefs(ctx context.Context, c *Ctx, season int, ids map[uu
 		out[r.ID] = r
 	}
 	return out, rows.Err()
+}
+
+// PlayerRefs resolves people with their bio for a season (latest otherwise).
+func (q *Queries) PlayerRefs(ctx context.Context, c *Ctx, season int, ids map[uuid.UUID]bool) (map[uuid.UUID]PlayerRef, error) {
+	list := make([]uuid.UUID, 0, len(ids))
+	for id := range ids {
+		list = append(list, id)
+	}
+	if len(list) == 0 {
+		return map[uuid.UUID]PlayerRef{}, nil
+	}
+	rows, err := q.s.DB.Query(ctx, playerRefSelect+`p.id = ANY($3::uuid[])`, c.Branch, season, list)
+	if err != nil {
+		return nil, err
+	}
+	return scanPlayerRefs(rows)
 }
 
 // SeasonLine is a person's season totals in one display group for one team.
@@ -622,8 +699,21 @@ type SeasonLine struct {
 // SeasonLines returns season lines filtered by season (or -1 for all),
 // person (uuid.Nil for all) and team (-1 for all).
 func (q *Queries) SeasonLines(ctx context.Context, c *Ctx, season int, person uuid.UUID, team int) ([]*SeasonLine, error) {
+	return q.seasonLines(ctx, c, season, person, team, "s.stats")
+}
+
+// LeagueSeasonLines is SeasonLines for every player in a season with
+// zero-valued stats left out, which more than halves what crosses the
+// network. Only for callers that read stats by key (a missing key reads as
+// zero), such as leader boards; not for output that lists the keys.
+func (q *Queries) LeagueSeasonLines(ctx context.Context, c *Ctx, season int) ([]*SeasonLine, error) {
+	return q.seasonLines(ctx, c, season, uuid.Nil, -1,
+		`COALESCE((SELECT jsonb_object_agg(k, v) FROM jsonb_each(s.stats) e(k, v) WHERE v <> '0'::jsonb), '{}'::jsonb)`)
+}
+
+func (q *Queries) seasonLines(ctx context.Context, c *Ctx, season int, person uuid.UUID, team int, statsExpr string) ([]*SeasonLine, error) {
 	rows, err := q.s.DB.Query(ctx, `SELECT s.season_index, s.person_id, p.first_name, p.last_name, COALESCE(ps.position, ''), COALESCE(ps.jersey, 0), COALESCE(ps.portrait, ''),
-		COALESCE(ps.school_year, ''), s.team_id, s.category, s.stats
+		COALESCE(ps.school_year, ''), s.team_id, s.category, `+statsExpr+`
 		FROM player_season_stat s JOIN person p ON p.id = s.person_id
 		LEFT JOIN (SELECT DISTINCT ON (x.person_id) x.* FROM player_season x WHERE x.branch_id = $1 AND ($3::uuid IS NULL OR x.person_id = $3)
 			ORDER BY x.person_id, (x.season_index = $2) DESC, x.season_index DESC) ps ON ps.person_id = s.person_id
@@ -945,10 +1035,10 @@ func (q *Queries) LeagueAwards(ctx context.Context, c *Ctx) ([]*LeagueAward, err
 
 // ConfChamp is a conference title game result.
 type ConfChamp struct {
-	Seq                      int
+	Seq                       int
 	Conference, Winner, Loser string
-	WS, LS, WR, LR           int
-	Coach                    string
+	WS, LS, WR, LR            int
+	Coach                     string
 }
 
 // ConferenceChampions returns title game history, newest first.
@@ -1105,9 +1195,9 @@ func (q *Queries) Events(ctx context.Context, c *Ctx, person uuid.UUID) ([]*Even
 
 // Rivalry is a series record.
 type Rivalry struct {
-	Name                 string
-	Team1, Team2         int
-	W1, W2               int
+	Name                  string
+	Team1, Team2          int
+	W1, W2                int
 	StreakLen, StreakTeam int
 }
 

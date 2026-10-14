@@ -72,9 +72,18 @@ func (s *Site) page(f pageFunc) http.HandlerFunc {
 			s.fail(w, err)
 			return
 		}
+		// The ticker loads alongside the page and shares its scoreboard data.
+		r = r.WithContext(withWeekCache(r.Context(), c))
+		var ticker []*GameCard
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			ticker = s.ticker(r.Context(), c)
+		}()
 		name, d, err := f(r, c)
+		<-done
 		if errors.Is(err, errNotFound) {
-			s.render(w, http.StatusNotFound, "notfound", data{"C": c, "Ticker": s.ticker(r.Context(), c)})
+			s.render(w, http.StatusNotFound, "notfound", data{"C": c, "Ticker": ticker})
 			return
 		}
 		if err != nil {
@@ -82,7 +91,7 @@ func (s *Site) page(f pageFunc) http.HandlerFunc {
 			return
 		}
 		d["C"] = c
-		d["Ticker"] = s.ticker(r.Context(), c)
+		d["Ticker"] = ticker
 		d["Path"] = r.URL.Path
 		d["CanEdit"] = canEdit(r)
 		s.render(w, http.StatusOK, name, d)
@@ -136,11 +145,11 @@ func seasonParam(r *http.Request, c *store.Ctx) int {
 
 // GameCard is a scoreboard tile.
 type GameCard struct {
-	G        *store.Game
-	Away     *store.Team
-	Home     *store.Team
-	Leaders  []string
-	Year     int
+	G       *store.Game
+	Away    *store.Team
+	Home    *store.Team
+	Leaders []string
+	Year    int
 }
 
 // Tag names the kind of game for scoreboards and schedules.
@@ -178,15 +187,12 @@ func (s *Site) cards(ctx context.Context, c *store.Ctx, season int, games []*sto
 	}
 	out := make([]*GameCard, 0, len(games))
 	for _, g := range games {
-		gc := &GameCard{G: g, Away: teamOr(teams, g.Away), Home: teamOr(teams, g.Home), Year: c.YearOf(season)}
-		if leaders && g.Played {
-			lines, err := s.q.GameLines(ctx, c, season, g.Row)
-			if err != nil {
-				return nil, err
-			}
-			gc.Leaders = gameLeaders(lines, teams)
+		out = append(out, &GameCard{G: g, Away: teamOr(teams, g.Away), Home: teamOr(teams, g.Home), Year: c.YearOf(season)})
+	}
+	if leaders {
+		if err := s.addLeaders(ctx, c, season, out...); err != nil {
+			return nil, err
 		}
-		out = append(out, gc)
 	}
 	return out, nil
 }
@@ -238,11 +244,11 @@ func gameLeaders(lines []*store.Line, teams map[int]*store.Team) []string {
 // ticker is the scores strip at the top of every page (current week).
 func (s *Site) ticker(ctx context.Context, c *store.Ctx) []*GameCard {
 	wt, wk := s.currentWeek(ctx, c)
-	games, err := s.q.GamesForWeek(ctx, c, c.Season, wt, wk)
+	byWeek, err := s.weekGames(ctx, c, c.Season, store.WeekID{WeekType: wt, Week: wk})
 	if err != nil {
 		return nil
 	}
-	cards, _ := s.cards(ctx, c, c.Season, games, false)
+	cards, _ := s.cards(ctx, c, c.Season, byWeek[store.WeekID{WeekType: wt, Week: wk}], false)
 	// Ranked matchups first, like ESPN's top events.
 	sort.SliceStable(cards, func(i, j int) bool { return cardWeight(cards[i]) > cardWeight(cards[j]) })
 	if len(cards) > 30 {
@@ -267,7 +273,11 @@ func cardWeight(g *GameCard) int {
 // currentWeek picks the scoreboard week to show: the latest week with a
 // played game, or the current save week.
 func (s *Site) currentWeek(ctx context.Context, c *store.Ctx) (string, int) {
-	weeks, err := s.q.Weeks(ctx, c, c.Season)
+	weeks, err := s.seasonWeeks(ctx, c, c.Season)
+	return pickWeek(c, weeks, err)
+}
+
+func pickWeek(c *store.Ctx, weeks []store.WeekKey, err error) (string, int) {
 	if err != nil || len(weeks) == 0 {
 		return c.WeekType, c.Week
 	}
@@ -290,63 +300,90 @@ func (s *Site) currentWeek(ctx context.Context, c *store.Ctx) (string, int) {
 
 func (s *Site) home(r *http.Request, c *store.Ctx) (string, data, error) {
 	ctx := r.Context()
-	teams, err := s.q.Teams(ctx, c, c.Season)
-	if err != nil {
-		return "", nil, err
-	}
-	wt, wk := s.currentWeek(ctx, c)
-	games, err := s.q.GamesForWeek(ctx, c, c.Season, wt, wk)
-	if err != nil {
-		return "", nil, err
-	}
-	// Last completed week's results among ranked teams.
-	weeks, _ := s.q.Weeks(ctx, c, c.Season)
-	var prev []*store.Game
-	for i := len(weeks) - 1; i >= 0; i-- {
-		g, _ := s.q.GamesForWeek(ctx, c, c.Season, weeks[i].WeekType, weeks[i].Week)
-		played := 0
-		for _, x := range g {
-			if x.Played {
-				played++
+	var (
+		teams             map[int]*store.Team
+		lines             []*store.SeasonLine
+		stories           []*store.Article
+		wt                string
+		wk                int
+		featured          *GameCard
+		upcoming, results []*GameCard
+	)
+	// The scoreboard (weeks, then games, then box score leaders) runs
+	// alongside the league stat lines, the slowest single query.
+	err := parallel(
+		func() error {
+			var games, prev []*store.Game
+			err := parallel(
+				func() (err error) { teams, err = s.q.Teams(ctx, c, c.Season); return },
+				func() error {
+					weeks, werr := s.seasonWeeks(ctx, c, c.Season)
+					wt, wk = pickWeek(c, weeks, werr)
+					cur := store.WeekID{WeekType: wt, Week: wk}
+					ids := []store.WeekID{cur}
+					// Last completed week's results among ranked teams.
+					var last *store.WeekID
+					for i := len(weeks) - 1; i >= 0; i-- {
+						if weeks[i].Played > 0 && weeks[i].Played == weeks[i].Games {
+							id := weeks[i].ID()
+							last = &id
+							if id != cur {
+								ids = append(ids, id)
+							}
+							break
+						}
+					}
+					byWeek, err := s.weekGames(ctx, c, c.Season, ids...)
+					if err != nil {
+						return err
+					}
+					games = byWeek[cur]
+					if last != nil {
+						prev = byWeek[*last]
+					}
+					return nil
+				},
+			)
+			if err != nil {
+				return err
 			}
-		}
-		if played > 0 && played == len(g) {
-			prev = g
-			break
-		}
-	}
-	upcoming, err := s.cards(ctx, c, c.Season, games, true)
+			if upcoming, err = s.cards(ctx, c, c.Season, games, false); err != nil {
+				return err
+			}
+			sort.SliceStable(upcoming, func(i, j int) bool { return cardWeight(upcoming[i]) > cardWeight(upcoming[j]) })
+			if results, err = s.cards(ctx, c, c.Season, prev, false); err != nil {
+				return err
+			}
+			sort.SliceStable(results, func(i, j int) bool { return cardWeight(results[i]) > cardWeight(results[j]) })
+			if len(upcoming) > 0 {
+				featured = upcoming[0]
+			}
+			if len(results) > 8 {
+				results = results[:8]
+			}
+			if len(upcoming) > 10 {
+				upcoming = upcoming[1:11]
+			}
+			// Box score leaders only for the cards shown, in one query.
+			shown := append(append([]*GameCard{}, upcoming...), results...)
+			if featured != nil {
+				shown = append(shown, featured)
+			}
+			return s.addLeaders(ctx, c, c.Season, shown...)
+		},
+		func() (err error) { lines, err = s.q.LeagueSeasonLines(ctx, c, c.Season); return },
+		func() (err error) {
+			stories, err = s.q.Articles(ctx, c, store.ArticleFilter{Team: -1, Season: -1, Limit: 8})
+			return
+		},
+	)
 	if err != nil {
 		return "", nil, err
-	}
-	sort.SliceStable(upcoming, func(i, j int) bool { return cardWeight(upcoming[i]) > cardWeight(upcoming[j]) })
-	results, err := s.cards(ctx, c, c.Season, prev, true)
-	if err != nil {
-		return "", nil, err
-	}
-	sort.SliceStable(results, func(i, j int) bool { return cardWeight(results[i]) > cardWeight(results[j]) })
-	var featured *GameCard
-	if len(upcoming) > 0 {
-		featured = upcoming[0]
-	}
-	if len(results) > 8 {
-		results = results[:8]
-	}
-	if len(upcoming) > 10 {
-		upcoming = upcoming[1:11]
 	}
 	top25 := rankedTeams(teams, "ap")
-	lines, err := s.q.SeasonLines(ctx, c, c.Season, uuid.Nil, -1)
-	if err != nil {
-		return "", nil, err
-	}
 	leaders := []LeaderBoard{}
 	for _, id := range []string{"passyds", "rushyds", "recyds", "sacks", "ints", "tackles"} {
 		leaders = append(leaders, s.leaderBoard(id, lines, teams, 5))
-	}
-	stories, err := s.q.Articles(ctx, c, store.ArticleFilter{Team: -1, Season: -1, Limit: 8})
-	if err != nil {
-		return "", nil, err
 	}
 	return "home", data{"Featured": featured, "Upcoming": upcoming, "Results": results, "Top25": top25, "Teams": teams,
 		"Leaders": leaders, "WeekLabel": weekLabel(wt, wk), "Stories": s.storyCards(teams, stories)}, nil
@@ -381,7 +418,7 @@ func rankedTeams(teams map[int]*store.Team, poll string) []*store.Team {
 func (s *Site) scoreboard(r *http.Request, c *store.Ctx) (string, data, error) {
 	ctx := r.Context()
 	season := seasonParam(r, c)
-	weeks, err := s.q.Weeks(ctx, c, season)
+	weeks, err := s.seasonWeeks(ctx, c, season)
 	if err != nil {
 		return "", nil, err
 	}
@@ -396,10 +433,11 @@ func (s *Site) scoreboard(r *http.Request, c *store.Ctx) (string, data, error) {
 	if wt == "" {
 		wt = "RegularSeason"
 	}
-	games, err := s.q.GamesForWeek(ctx, c, season, wt, wk)
+	byWeek, err := s.weekGames(ctx, c, season, store.WeekID{WeekType: wt, Week: wk})
 	if err != nil {
 		return "", nil, err
 	}
+	games := byWeek[store.WeekID{WeekType: wt, Week: wk}]
 	conf := r.URL.Query().Get("conf")
 	cards, err := s.cards(ctx, c, season, games, true)
 	if err != nil {
@@ -471,26 +509,30 @@ type ScoreLine struct {
 func (s *Site) game(r *http.Request, c *store.Ctx) (string, data, error) {
 	ctx := r.Context()
 	season, row := atoi(r.PathValue("season"), -1)-c.BaseYear, atoi(r.PathValue("row"), -1)
-	g, err := s.q.Game(ctx, c, season, row)
+	var (
+		g      *store.Game
+		teams  map[int]*store.Team
+		lines  []*store.Line
+		plays  []*store.ScoringPlay
+		recaps []*store.Article
+	)
+	err := parallel(
+		func() (err error) { g, err = s.q.Game(ctx, c, season, row); return },
+		func() (err error) { teams, err = s.q.Teams(ctx, c, season); return },
+		func() (err error) { lines, err = s.q.GameLines(ctx, c, season, row); return },
+		func() (err error) { plays, err = s.q.ScoringPlays(ctx, c, season, row); return },
+		func() (err error) {
+			recaps, err = s.q.Articles(ctx, c, store.ArticleFilter{Team: -1, Season: season, Game: row, Drafts: canEdit(r), Limit: 5})
+			return
+		},
+	)
 	if err != nil {
 		return "", nil, err
 	}
 	if g == nil {
 		return "", nil, errNotFound
 	}
-	teams, err := s.q.Teams(ctx, c, season)
-	if err != nil {
-		return "", nil, err
-	}
 	away, home := teamOr(teams, g.Away), teamOr(teams, g.Home)
-	lines, err := s.q.GameLines(ctx, c, season, row)
-	if err != nil {
-		return "", nil, err
-	}
-	plays, err := s.q.ScoringPlays(ctx, c, season, row)
-	if err != nil {
-		return "", nil, err
-	}
 	box := func(t Table, team int) *RenderedTable {
 		rt := &RenderedTable{ID: t.ID, Name: t.Name, Headers: t.Cols}
 		total := store.Stats{}
@@ -527,10 +569,6 @@ func (s *Site) game(r *http.Request, c *store.Ctx) (string, data, error) {
 			continue
 		}
 		boxCats = append(boxCats, BoxCategory{Name: t.Name, Away: a, Home: h})
-	}
-	recaps, err := s.q.Articles(r.Context(), c, store.ArticleFilter{Team: -1, Season: season, Game: row, Drafts: canEdit(r), Limit: 5})
-	if err != nil {
-		return "", nil, err
 	}
 	return "game", data{"G": g, "Away": away, "Home": home, "Box": boxCats, "Recaps": s.storyCards(teams, recaps),
 		"TeamStats": teamBoxRows(g.AwayBox, g.HomeBox), "Scoring": scoringLines(g, plays, lines), "HasScoring": len(plays) > 0,
@@ -847,20 +885,40 @@ func itoa(n int) string { return strconv.Itoa(n) }
 
 func (s *Site) team(r *http.Request, c *store.Ctx) (string, data, error) {
 	ctx := r.Context()
-	t, season, err := s.teamHeader(ctx, r, c)
+	season, id := seasonParam(r, c), atoi(r.PathValue("id"), -1)
+	var (
+		teams    map[int]*store.Team
+		games    []*store.Game
+		lines    []*store.SeasonLine
+		coaches  []*store.Coach
+		inj      []*store.Injury
+		riv      []*store.Rivalry
+		recruits []*store.RecruitEntry
+		news     []*store.Article
+	)
+	// Everything keys on the team id from the URL, so it all loads at once;
+	// an unknown team is caught afterwards.
+	err := parallel(
+		func() (err error) { teams, err = s.q.Teams(ctx, c, season); return },
+		func() (err error) { games, err = s.q.TeamGames(ctx, c, season, id); return },
+		func() (err error) { lines, err = s.q.SeasonLines(ctx, c, season, uuid.Nil, id); return },
+		func() (err error) { coaches, err = s.q.Coaches(ctx, c, season, id); return },
+		func() (err error) { inj, err = s.q.Injuries(ctx, c, id); return },
+		func() (err error) { riv, err = s.q.Rivalries(ctx, c, id); return },
+		func() (err error) { recruits, err = s.q.Recruits(ctx, c, season, id); return },
+		func() (err error) {
+			news, err = s.q.Articles(ctx, c, store.ArticleFilter{Team: id, Season: -1, Limit: 5})
+			return
+		},
+	)
 	if err != nil {
 		return "", nil, err
 	}
-	teams, _ := s.q.Teams(ctx, c, season)
-	games, err := s.q.TeamGames(ctx, c, season, t.ID)
-	if err != nil {
-		return "", nil, err
+	t, ok := teams[id]
+	if !ok {
+		return "", nil, errNotFound
 	}
 	sched, err := s.cards(ctx, c, season, games, false)
-	if err != nil {
-		return "", nil, err
-	}
-	lines, err := s.q.SeasonLines(ctx, c, season, uuid.Nil, t.ID)
 	if err != nil {
 		return "", nil, err
 	}
@@ -870,26 +928,6 @@ func (s *Site) team(r *http.Request, c *store.Ctx) (string, data, error) {
 		if len(lb.Entries) > 0 {
 			leaders = append(leaders, lb)
 		}
-	}
-	coaches, err := s.q.Coaches(ctx, c, season, t.ID)
-	if err != nil {
-		return "", nil, err
-	}
-	inj, err := s.q.Injuries(ctx, c, t.ID)
-	if err != nil {
-		return "", nil, err
-	}
-	riv, err := s.q.Rivalries(ctx, c, t.ID)
-	if err != nil {
-		return "", nil, err
-	}
-	recruits, err := s.q.Recruits(ctx, c, season, t.ID)
-	if err != nil {
-		return "", nil, err
-	}
-	news, err := s.q.Articles(ctx, c, store.ArticleFilter{Team: t.ID, Season: -1, Limit: 5})
-	if err != nil {
-		return "", nil, err
 	}
 	st, _ := s.standingsData(ctx, c, season)
 	var confTable *Standing
@@ -1281,7 +1319,7 @@ func (s *Site) leaders(r *http.Request, c *store.Ctx) (string, data, error) {
 	if err != nil {
 		return "", nil, err
 	}
-	lines, err := s.q.SeasonLines(ctx, c, season, uuid.Nil, -1)
+	lines, err := s.q.LeagueSeasonLines(ctx, c, season)
 	if err != nil {
 		return "", nil, err
 	}
@@ -1339,8 +1377,8 @@ func (s *Site) awards(r *http.Request, c *store.Ctx) (string, data, error) {
 	// Major national awards by season, All-America teams for the selected season.
 	season := seasonParam(r, c)
 	type seasonAwards struct {
-		Year   int
-		Major  []*store.Award
+		Year  int
+		Major []*store.Award
 	}
 	bySeason := map[int]*seasonAwards{}
 	var allAm []*store.Award

@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"sort"
 	"strings"
+	"sync"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // CoachKey identifies a coach across seasons within a dynasty. The game reuses
@@ -53,31 +56,38 @@ type Postseason struct {
 // TeamHistory returns every season the game or we know of for a team,
 // newest first.
 func (q *Queries) TeamHistory(ctx context.Context, c *Ctx, team int) ([]*HistoryYear, error) {
-	rows, err := q.s.DB.Query(ctx, `SELECT year, coach_name, conference, division, wins, losses, ties, conf_wins, conf_losses, final_rank, conf_standing,
+	// Both queries go in one batch (one round trip).
+	b := &pgx.Batch{}
+	b.Queue(`SELECT year, coach_name, conference, division, wins, losses, ties, conf_wins, conf_losses, final_rank, conf_standing,
 		conf_champ, postseason FROM team_history WHERE branch_id = $1 AND team_id = $2`, c.Branch, team)
+	// Captured seasons: current records for the season in progress, and the
+	// flag that box scores and stats exist.
+	b.Queue(`SELECT season_index, conference, division, wins, losses, conf_wins, conf_losses, conf_standing, ap_rank
+		FROM team_season WHERE branch_id = $1 AND team_id = $2`, c.Branch, team)
+	br := q.s.DB.SendBatch(ctx, b)
+	defer br.Close()
+	rows, err := br.Query()
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	by := map[int]*HistoryYear{}
 	for rows.Next() {
 		h := &HistoryYear{TeamID: team}
 		var post []byte
 		if err := rows.Scan(&h.Year, &h.CoachName, &h.Conference, &h.Division, &h.W, &h.L, &h.T, &h.CW, &h.CL, &h.FinalRank, &h.ConfStanding,
 			&h.ConfChamp, &post); err != nil {
+			rows.Close()
 			return nil, err
 		}
 		json.Unmarshal(post, &h.Postseason)
 		h.Season = h.Year - c.BaseYear
 		by[h.Year] = h
 	}
+	rows.Close()
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	// Captured seasons: current records for the season in progress, and the
-	// flag that box scores and stats exist.
-	cr, err := q.s.DB.Query(ctx, `SELECT season_index, conference, division, wins, losses, conf_wins, conf_losses, conf_standing, ap_rank
-		FROM team_season WHERE branch_id = $1 AND team_id = $2`, c.Branch, team)
+	cr, err := br.Query()
 	if err != nil {
 		return nil, err
 	}
@@ -189,11 +199,30 @@ func (q *Queries) CoachProfile(ctx context.Context, c *Ctx, key string) (*CoachP
 		teams[s.TeamID] = true
 	}
 	name := abbrev(p.Latest.First, p.Latest.Last)
+	// One team's history is one round trip; fetch every school at once.
+	hists := map[int][]*HistoryYear{}
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	var herr error
 	for team := range teams {
-		hist, err := q.TeamHistory(ctx, c, team)
-		if err != nil {
-			return nil, err
-		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			h, err := q.TeamHistory(ctx, c, team)
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil && herr == nil {
+				herr = err
+			}
+			hists[team] = h
+		}()
+	}
+	wg.Wait()
+	if herr != nil {
+		return nil, herr
+	}
+	for team := range teams {
+		hist := hists[team]
 		for _, h := range hist {
 			for _, s := range p.Stints {
 				if s.TeamID == team && s.Year == h.Year {
@@ -246,4 +275,40 @@ func (q *Queries) GamesForTeamSeasons(ctx context.Context, c *Ctx, team int, sea
 		return nil, err
 	}
 	return scanGames(rows)
+}
+
+// TeamSeason names one team in one season.
+type TeamSeason struct{ Season, Team int }
+
+// GamesForTeamSeasonList returns, for each (season, team), that team's games
+// in that season in GamesForTeamSeasons order, all in one query.
+func (q *Queries) GamesForTeamSeasonList(ctx context.Context, c *Ctx, list []TeamSeason) (map[TeamSeason][]*Game, error) {
+	out := map[TeamSeason][]*Game{}
+	if len(list) == 0 {
+		return out, nil
+	}
+	ss, ts := make([]int32, len(list)), make([]int32, len(list))
+	for i, x := range list {
+		ss[i], ts[i] = int32(x.Season), int32(x.Team)
+	}
+	rows, err := q.s.DB.Query(ctx, `SELECT `+gameCols+` FROM game g WHERE branch_id = $1
+		AND EXISTS (SELECT 1 FROM unnest($2::int[], $3::int[]) AS x(season, team)
+			WHERE g.season_index = x.season AND (g.home_team = x.team OR g.away_team = x.team))
+		AND (home_team >= 0 OR away_team >= 0) AND week_type <> 'PreSeason'
+		ORDER BY season_index DESC, CASE week_type WHEN 'RegularSeason' THEN 0 ELSE 1 END DESC, week DESC`, c.Branch, ss, ts)
+	if err != nil {
+		return nil, err
+	}
+	gs, err := scanGames(rows)
+	if err != nil {
+		return nil, err
+	}
+	for _, g := range gs {
+		for _, x := range list {
+			if g.Season == x.Season && (g.Home == x.Team || g.Away == x.Team) {
+				out[x] = append(out[x], g)
+			}
+		}
+	}
+	return out, nil
 }

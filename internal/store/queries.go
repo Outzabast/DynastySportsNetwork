@@ -79,6 +79,7 @@ type Queries struct {
 	ctx   map[int]*Ctx // by dynasty id (0 = most recently played)
 	at    map[int]time.Time
 	teams map[[2]int]map[int]*Team // (branch, season)
+	memo_ memoCache
 }
 
 func NewQueries(s *Store) *Queries {
@@ -92,6 +93,7 @@ func (q *Queries) Invalidate() {
 	q.at = map[int]time.Time{}
 	q.teams = map[[2]int]map[int]*Team{}
 	q.mu.Unlock()
+	q.clearMemo()
 }
 
 // ErrNoData means nothing has been ingested yet.
@@ -413,6 +415,14 @@ type WeekID struct {
 
 // Weeks lists the weeks that have games in a season, in calendar order.
 func (q *Queries) Weeks(ctx context.Context, c *Ctx, season int) ([]WeekKey, error) {
+	v, err := q.memo(c, memoKey("weeks", season), func() (any, error) { return q.weeks(ctx, c, season) })
+	if err != nil {
+		return nil, err
+	}
+	return append([]WeekKey(nil), v.([]WeekKey)...), nil
+}
+
+func (q *Queries) weeks(ctx context.Context, c *Ctx, season int) ([]WeekKey, error) {
 	rows, err := q.s.DB.Query(ctx, `SELECT week_type, week, count(*), count(*) FILTER (WHERE played) FROM game WHERE branch_id = $1 AND season_index = $2
 		GROUP BY 1,2 ORDER BY 2, 1`, c.Branch, season)
 	if err != nil {
@@ -431,6 +441,32 @@ func (q *Queries) Weeks(ctx context.Context, c *Ctx, season int) ([]WeekKey, err
 // GamesForWeeks returns several scoreboard weeks in one query, each in
 // GamesForWeek order.
 func (q *Queries) GamesForWeeks(ctx context.Context, c *Ctx, season int, weeks []WeekID) (map[WeekID][]*Game, error) {
+	// Cache per week so different week sets share entries.
+	out := map[WeekID][]*Game{}
+	var missing []WeekID
+	for _, w := range weeks {
+		if v, ok := q.peek(c, memoKey("week", season, w)); ok {
+			out[w] = append([]*Game(nil), v.([]*Game)...)
+		} else {
+			missing = append(missing, w)
+		}
+	}
+	if len(missing) == 0 {
+		return out, nil
+	}
+	got, err := q.gamesForWeeks(ctx, c, season, missing)
+	if err != nil {
+		return nil, err
+	}
+	for _, w := range missing {
+		gs := got[w]
+		q.memo(c, memoKey("week", season, w), func() (any, error) { return gs, nil })
+		out[w] = append([]*Game(nil), gs...)
+	}
+	return out, nil
+}
+
+func (q *Queries) gamesForWeeks(ctx context.Context, c *Ctx, season int, weeks []WeekID) (map[WeekID][]*Game, error) {
 	out := map[WeekID][]*Game{}
 	if len(weeks) == 0 {
 		return out, nil
@@ -468,12 +504,18 @@ func (q *Queries) GamesForWeek(ctx context.Context, c *Ctx, season int, weekType
 
 // TeamGames returns a team's schedule for a season.
 func (q *Queries) TeamGames(ctx context.Context, c *Ctx, season, team int) ([]*Game, error) {
-	rows, err := q.s.DB.Query(ctx, `SELECT `+gameCols+` FROM game WHERE branch_id = $1 AND season_index = $2 AND (home_team = $3 OR away_team = $3)
-		ORDER BY week, month, day`, c.Branch, season, team)
+	v, err := q.memo(c, memoKey("teamgames", season, team), func() (any, error) {
+		rows, err := q.s.DB.Query(ctx, `SELECT `+gameCols+` FROM game WHERE branch_id = $1 AND season_index = $2 AND (home_team = $3 OR away_team = $3)
+			ORDER BY week, month, day`, c.Branch, season, team)
+		if err != nil {
+			return nil, err
+		}
+		return scanGames(rows)
+	})
 	if err != nil {
 		return nil, err
 	}
-	return scanGames(rows)
+	return append([]*Game(nil), v.([]*Game)...), nil
 }
 
 // TeamPoints is a team's scoring from played games in one season.
@@ -484,6 +526,18 @@ type TeamPoints struct {
 // SeasonPoints totals points scored and allowed per team over a season's
 // played games (the TeamStats row carries no points).
 func (q *Queries) SeasonPoints(ctx context.Context, c *Ctx, season int) (map[int]TeamPoints, error) {
+	v, err := q.memo(c, memoKey("points", season), func() (any, error) { return q.seasonPoints(ctx, c, season) })
+	if err != nil {
+		return nil, err
+	}
+	out := map[int]TeamPoints{}
+	for k, p := range v.(map[int]TeamPoints) {
+		out[k] = p
+	}
+	return out, nil
+}
+
+func (q *Queries) seasonPoints(ctx context.Context, c *Ctx, season int) (map[int]TeamPoints, error) {
 	rows, err := q.s.DB.Query(ctx, `SELECT home_team, away_team, home_score, away_score FROM game
 		WHERE branch_id = $1 AND season_index = $2 AND played`, c.Branch, season)
 	if err != nil {
@@ -519,6 +573,14 @@ type Result struct {
 // SeasonResults lists every game of a season (played or not) without box
 // scores, in week order.
 func (q *Queries) SeasonResults(ctx context.Context, c *Ctx, season int) ([]Result, error) {
+	v, err := q.memo(c, memoKey("results", season), func() (any, error) { return q.seasonResults(ctx, c, season) })
+	if err != nil {
+		return nil, err
+	}
+	return append([]Result(nil), v.([]Result)...), nil
+}
+
+func (q *Queries) seasonResults(ctx context.Context, c *Ctx, season int) ([]Result, error) {
 	rows, err := q.s.DB.Query(ctx, `SELECT week, home_team, away_team, home_score, away_score, played, game_type, bowl_name FROM game
 		WHERE branch_id = $1 AND season_index = $2 ORDER BY week, game_row`, c.Branch, season)
 	if err != nil {
@@ -594,6 +656,27 @@ func (q *Queries) GameLines(ctx context.Context, c *Ctx, season, row int) ([]*Li
 // GamesLines is GameLines for several games of a season in one query, keyed
 // by game row.
 func (q *Queries) GamesLines(ctx context.Context, c *Ctx, season int, games []int) (map[int][]*Line, error) {
+	return q.gamesLines(ctx, c, season, games, "s.stats", "")
+}
+
+// leaderKeys are the only stats score cards read (passing, rushing and
+// receiving leaders). They appear on both offense and returns_off lines
+// (the game files some players' rushing under its KP/return stats table),
+// which together make up the "offense" group.
+var leaderKeys = []string{"PASSYARDS", "PASSCOMPLETED", "PASSATTEMPTS", "PASSTDS", "RUSHYARDS", "RUSHATTEMPTS", "RUSHTDS",
+	"RECEIVEYARDS", "RECEIVECATCHES", "RECEIVETDS"}
+
+// GamesLeaderLines is GamesLines trimmed to the offense group and
+// leaderKeys, a fraction of the bytes, for schedule and scoreboard cards.
+func (q *Queries) GamesLeaderLines(ctx context.Context, c *Ctx, season int, games []int) (map[int][]*Line, error) {
+	pairs := make([]string, len(leaderKeys))
+	for i, k := range leaderKeys {
+		pairs[i] = "'" + k + "', s.stats->'" + k + "'"
+	}
+	return q.gamesLines(ctx, c, season, games, "jsonb_strip_nulls(jsonb_build_object("+strings.Join(pairs, ", ")+"))", "AND s.category IN ('offense', 'returns_off')")
+}
+
+func (q *Queries) gamesLines(ctx context.Context, c *Ctx, season int, games []int, statsExpr, where string) (map[int][]*Line, error) {
 	out := map[int][]*Line{}
 	if len(games) == 0 {
 		return out, nil
@@ -603,10 +686,10 @@ func (q *Queries) GamesLines(ctx context.Context, c *Ctx, season int, games []in
 		list[i] = int32(g)
 	}
 	rows, err := q.s.DB.Query(ctx, `SELECT s.game_row, s.person_id, p.first_name, p.last_name, COALESCE(ps.position, ''), COALESCE(ps.jersey, 0), COALESCE(ps.portrait, ''),
-		s.team_id, s.category, s.stats
+		s.team_id, s.category, `+statsExpr+`
 		FROM player_game_stat s JOIN person p ON p.id = s.person_id
 		LEFT JOIN player_season ps ON ps.branch_id = s.branch_id AND ps.season_index = s.season_index AND ps.person_id = s.person_id
-		WHERE s.branch_id = $1 AND s.season_index = $2 AND s.game_row = ANY($3::int[])`, c.Branch, season, list)
+		WHERE s.branch_id = $1 AND s.season_index = $2 AND s.game_row = ANY($3::int[]) `+where, c.Branch, season, list)
 	if err != nil {
 		return nil, err
 	}
@@ -764,7 +847,17 @@ type SeasonLine struct {
 // SeasonLines returns season lines filtered by season (or -1 for all),
 // person (uuid.Nil for all) and team (-1 for all).
 func (q *Queries) SeasonLines(ctx context.Context, c *Ctx, season int, person uuid.UUID, team int) ([]*SeasonLine, error) {
-	return q.seasonLines(ctx, c, season, person, team, "s.stats")
+	if person != uuid.Nil || team < 0 {
+		return q.seasonLines(ctx, c, season, person, team, "s.stats")
+	}
+	// One team's season (team stats page, game previews): cached.
+	v, err := q.memo(c, memoKey("teamlines", season, team), func() (any, error) {
+		return q.seasonLines(ctx, c, season, person, team, "s.stats")
+	})
+	if err != nil {
+		return nil, err
+	}
+	return append([]*SeasonLine(nil), v.([]*SeasonLine)...), nil
 }
 
 // LeagueSeasonLines is SeasonLines for every player in a season with

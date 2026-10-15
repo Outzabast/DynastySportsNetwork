@@ -132,7 +132,7 @@ func (s *Site) addLeaders(ctx context.Context, c *store.Ctx, season int, cards .
 	if err != nil {
 		return err
 	}
-	lines, err := s.q.GamesLines(ctx, c, season, rows)
+	lines, err := s.q.GamesLeaderLines(ctx, c, season, rows)
 	if err != nil {
 		return err
 	}

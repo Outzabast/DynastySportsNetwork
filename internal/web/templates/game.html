@@ -109,11 +109,11 @@
     <div class="card">
       <h2>Matchup Predictor</h2>
       <div class="mp">
-        <div class="mp-side"><b>{{printf "%.1f" .AwayPct}}%</b><span class="muted small">{{$away.Short}}</span></div>
+        <div class="mp-side"><b>{{printf "%.1f" .AwayPct}}%</b><span class="muted small"><i class="sw" style="background: {{color $.AwayColor}}"></i>{{$away.Short}}</span></div>
         <div class="mp-ring" style="--a: {{color $.AwayColor}}; --h: {{color $.HomeColor}}; --p: {{printf "%.2f" .HomePct}}%">
           <div class="mp-in">{{template "teamlogo" $away}}{{template "teamlogo" $home}}</div>
         </div>
-        <div class="mp-side r"><b>{{printf "%.1f" .HomePct}}%</b><span class="muted small">{{$home.Short}}</span></div>
+        <div class="mp-side r"><b>{{printf "%.1f" .HomePct}}%</b><span class="muted small">{{$home.Short}}<i class="sw" style="background: {{color $.HomeColor}}"></i></span></div>
       </div>
       <div class="card-f muted">Projected score: {{$away.Short}} {{printf "%.0f" .AwayPts}}, {{$home.Short}} {{printf "%.0f" .HomePts}}.
         {{if .Games}}Based on {{.Games}} games played this season{{else}}Based on last season's results{{end}}{{if $g.Week}}, before week {{$g.Week}}{{end}}.</div>

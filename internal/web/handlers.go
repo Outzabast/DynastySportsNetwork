@@ -287,9 +287,21 @@ func pickWeek(c *store.Ctx, weeks []store.WeekKey, err error) (string, int) {
 			return w.WeekType, w.Week
 		}
 	}
+	// Before or during the season, the next week with games. Outside game
+	// weeks (end-of-season recap, offseason) the week number restarts and
+	// says nothing about the schedule, so fall through to the last week.
+	inSeason := c.WeekType == "RegularSeason" || c.WeekType == "PreSeason"
 	for _, w := range weeks {
-		if w.Week >= c.Week {
-			return w.WeekType, w.Week
+		if w.WeekType == c.WeekType {
+			inSeason = true
+			break
+		}
+	}
+	if inSeason {
+		for _, w := range weeks {
+			if w.Week >= c.Week {
+				return w.WeekType, w.Week
+			}
 		}
 	}
 	last := weeks[len(weeks)-1]
@@ -584,7 +596,7 @@ func (s *Site) game(r *http.Request, c *store.Ctx) (string, data, error) {
 		}
 	}
 	// Played games show the line they carried into kickoff in the info bar.
-	d["Pred"], d["Line"] = prediction(cur, last, g)
+	d["Pred"], d["Line"] = prediction(cur, last, g, home, away)
 	if !g.Played {
 		pv, err := s.preview(ctx, c, g, teams, away, home)
 		if err != nil {

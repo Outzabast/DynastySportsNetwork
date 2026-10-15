@@ -28,7 +28,7 @@ func (s *Site) seasonResults(ctx context.Context, c *store.Ctx, season int) (cur
 
 // prediction fits the predictor on every result before the game's week, so a
 // played game shows the line it carried into kickoff.
-func prediction(cur, last []store.Result, g *store.Game) (*Prediction, *Line) {
+func prediction(cur, last []store.Result, g *store.Game, home, away *store.Team) (*Prediction, *Line) {
 	var prior *ratings
 	if len(last) > 0 {
 		prior = fitRatings(last, 1<<30, nil)
@@ -39,7 +39,7 @@ func prediction(cur, last []store.Result, g *store.Game) (*Prediction, *Line) {
 			neutral = r.Neutral
 		}
 	}
-	p := predict(fitRatings(cur, g.Week, prior), g.Home, g.Away, neutral)
+	p := predict(fitRatings(cur, g.Week, prior), g.Home, g.Away, neutral, home.Rank(), away.Rank())
 	return p, p.line(g.Home, g.Away)
 }
 

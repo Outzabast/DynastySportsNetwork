@@ -18,6 +18,7 @@ import (
 // so the expected margin is (off-def gap) + home field. Ratings are pulled
 // toward last season's (regressed) values, which carries the early weeks;
 // by midseason the current results dominate. FCS opponents share one rating.
+// A small poll-ranking edge is added on top (see rankEdge).
 
 const (
 	predPriorWeight = 3.0  // the prior counts as this many games
@@ -25,6 +26,7 @@ const (
 	predHFA         = 2.5  // home field prior, points
 	predSigma       = 15.0 // spread error, points (college football ~14-16)
 	predVig         = 1.0225
+	predRankMax     = 4.0 // ranking edge of #1 over an unranked team, points
 	fcsTeam         = -1
 )
 
@@ -174,8 +176,22 @@ type Line struct {
 	FavSpread              string
 }
 
-func predict(r *ratings, home, away int, neutral bool) *Prediction {
+// rankEdge is the bonus, in points, a poll ranking adds to a team's margin.
+// Books and fans lean toward the ranked team even when results say the sides
+// are close: #1 is worth predRankMax over an unranked team, #25 almost nothing.
+func rankEdge(rank int) float64 {
+	if rank < 1 || rank > 25 {
+		return 0
+	}
+	return predRankMax * float64(26-rank) / 25
+}
+
+// predict projects a game; homeRank and awayRank are poll ranks (0 = unranked).
+func predict(r *ratings, home, away int, neutral bool, homeRank, awayRank int) *Prediction {
 	hp, ap := r.points(home, away, true, neutral), r.points(away, home, false, neutral)
+	// Split the ranking edge across both scores so the total is unchanged.
+	edge := rankEdge(homeRank) - rankEdge(awayRank)
+	hp, ap = hp+edge/2, ap-edge/2
 	spread := hp - ap
 	ph := 0.5 * (1 + math.Erf(spread/(predSigma*math.Sqrt2)))
 	return &Prediction{AwayPct: 100 * (1 - ph), HomePct: 100 * ph, AwayPts: ap, HomePts: hp, Spread: spread, Total: hp + ap, Games: r.games}

@@ -292,6 +292,16 @@ func (q *Queries) Teams(ctx context.Context, c *Ctx, season int) (map[int]*Team,
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+	results, err := q.SeasonResults(ctx, c, season)
+	if err != nil {
+		return nil, err
+	}
+	recs := tallyRecords(results, 1<<30)
+	for id, t := range m {
+		if r, ok := recs[id]; ok {
+			r.apply(&t.W, &t.L, &t.CW, &t.CL, &t.Streak)
+		}
+	}
 	q.mu.Lock()
 	q.teams[[2]int{c.Branch, season}] = m
 	q.mu.Unlock()
@@ -568,6 +578,7 @@ type Result struct {
 	HomeScore, AwayScore int
 	Played               bool
 	Neutral              bool // conference title games, bowls and playoffs
+	Conference           bool // counts toward the conference record
 }
 
 // SeasonResults lists every game of a season (played or not) without box
@@ -597,6 +608,8 @@ func (q *Queries) seasonResults(ctx context.Context, c *Ctx, season int) ([]Resu
 		switch g.Kind() {
 		case "conf_championship", "bowl", "playoff", "national_championship":
 			r.Neutral = true
+		case "conference":
+			r.Conference = true
 		}
 		out = append(out, r)
 	}
@@ -1136,7 +1149,22 @@ func (q *Queries) Poll(ctx context.Context, c *Ctx, season int, w PollWeek, poll
 		rows.Scan(&p.TeamID, &p.Rank, &p.Points, &p.FirstPlace, &p.PrevRank, &p.W, &p.L)
 		out = append(out, p)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// The poll was taken before that week's games.
+	results, err := q.SeasonResults(ctx, c, season)
+	if err != nil {
+		return nil, err
+	}
+	recs := tallyRecords(results, w.Week)
+	for _, p := range out {
+		if r, ok := recs[p.TeamID]; ok {
+			var cw, cl, st int
+			r.apply(&p.W, &p.L, &cw, &cl, &st)
+		}
+	}
+	return out, nil
 }
 
 // Award is an honor won by a player.
@@ -1463,4 +1491,65 @@ func (q *Queries) Admin(ctx context.Context, c *Ctx) (*AdminInfo, error) {
 	q.s.DB.QueryRow(ctx, "SELECT count(*) FROM person WHERE dynasty_id = $1", c.Dynasty).Scan(&n)
 	a.Counts["person"] = n
 	return a, nil
+}
+
+// record is a team's W-L tallied from played games.
+type record struct {
+	W, L, CW, CL, Streak int
+}
+
+// tallyRecords counts each team's record over played games before
+// beforeWeek. The save's own W-L columns can lag a week behind the results
+// it already holds, so the site counts the games itself.
+func tallyRecords(results []Result, beforeWeek int) map[int]*record {
+	out := map[int]*record{}
+	for _, r := range results { // week order
+		if !r.Played || r.Week >= beforeWeek || r.HomeScore == r.AwayScore {
+			continue
+		}
+		for _, side := range []struct {
+			team int
+			won  bool
+		}{{r.Home, r.HomeScore > r.AwayScore}, {r.Away, r.AwayScore > r.HomeScore}} {
+			rec := out[side.team]
+			if rec == nil {
+				rec = &record{}
+				out[side.team] = rec
+			}
+			if side.won {
+				rec.W++
+				if r.Conference {
+					rec.CW++
+				}
+				if rec.Streak > 0 {
+					rec.Streak++
+				} else {
+					rec.Streak = 1
+				}
+			} else {
+				rec.L++
+				if r.Conference {
+					rec.CL++
+				}
+				if rec.Streak < 0 {
+					rec.Streak--
+				} else {
+					rec.Streak = -1
+				}
+			}
+		}
+	}
+	return out
+}
+
+// apply replaces the save's record when the games show more decisions.
+// Seasons ingested before game types were stored can't count conference
+// games, so the save's conference record stands unless ours is ahead too.
+func (r *record) apply(w, l, cw, cl, streak *int) {
+	if r.W+r.L > *w+*l {
+		*w, *l, *streak = r.W, r.L, r.Streak
+	}
+	if r.CW+r.CL > *cw+*cl {
+		*cw, *cl = r.CW, r.CL
+	}
 }

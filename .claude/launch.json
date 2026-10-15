@@ -6,6 +6,12 @@
       "runtimeExecutable": "C:/Program Files/Go/bin/go.exe",
       "runtimeArgs": ["run", "./cmd/dsn", "serve"],
       "port": 8080
+    },
+    {
+      "name": "dsn-preview",
+      "runtimeExecutable": "C:/Program Files/Go/bin/go.exe",
+      "runtimeArgs": ["run", "./cmd/dsn", "serve", "-no-watch", "-addr", ":8081"],
+      "port": 8081
     }
   ]
 }

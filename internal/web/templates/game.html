@@ -34,18 +34,13 @@
     <span>{{$g.Temperature}}°F, {{pretty $g.Weather}}{{if $g.Wind}}, wind {{pretty $g.Wind}} ({{$g.WindSpeed}} mph){{end}}</span>
     {{with $g.Network}}<span>Coverage: {{.}}</span>{{end}}
     <span>{{weekLabel $g.WeekType $g.Week}}</span>
+    {{if and $g.Played .Line}}<span>Line: {{if eq .Line.Favorite -2}}Pick'em{{else}}{{.LineFav.Short}} {{.Line.FavSpread}}{{end}} · O/U {{.Line.Total}}</span>{{end}}
   </div>
 </div>
 
-{{range .Recaps}}
-<a class="card story-row" href="{{.URL}}">
-  {{if .Image}}<img src="{{.Image}}" alt="" loading="lazy">{{end}}
-  <div><div class="muted small" style="font-weight:700;text-transform:uppercase">{{if .Published}}Recap{{else}}Draft recap{{end}}</div><div class="sr-h">{{.Headline}}</div>{{with .Dek}}<p>{{.}}</p>{{end}}<div class="story-stamp">{{timeAgo .When}}{{with .Byline}} • {{.}}{{end}}</div></div>
-</a>
-{{end}}
-{{if and .CanEdit (not .Recaps)}}<p><a class="btn btn-ghost" href="/write?game={{.Year}}/{{$g.Row}}">Write a recap</a></p>{{end}}
-
 {{if $g.Played}}
+{{template "gamestories" .}}
+{{if and .CanEdit (not .HasRecap)}}<p><a class="btn btn-ghost" href="/write?game={{.Year}}/{{$g.Row}}&kind=recap">Write a recap</a></p>{{end}}
 <div class="grid g-2">
   <div>
     <div class="card">
@@ -94,8 +89,99 @@
   {{end}}
 </div>
 {{else}}
-<div class="card card-b">This game has not been played yet.</div>
+{{template "preview" .}}
 {{end}}
+{{end}}
+
+{{define "gamestories"}}
+{{range .Stories}}
+<a class="card story-row" href="{{.URL}}">
+  {{if .Image}}<img src="{{.Image}}" alt="" loading="lazy">{{end}}
+  <div><div class="muted small" style="font-weight:700;text-transform:uppercase">{{if not .Published}}Draft {{end}}{{.Label}}</div><div class="sr-h">{{.Headline}}</div>{{with .Dek}}<p>{{.}}</p>{{end}}<div class="story-stamp">{{timeAgo .When}}{{with .Byline}} • {{.}}{{end}}</div></div>
+</a>
+{{end}}
+{{end}}
+
+{{define "preview"}}{{$g := .G}}{{$away := .Away}}{{$home := .Home}}
+<div class="grid g-main">
+  <div class="col-left">
+    {{with .Pred}}
+    <div class="card">
+      <h2>Matchup Predictor</h2>
+      <div class="mp">
+        <div class="mp-side"><b>{{printf "%.1f" .AwayPct}}%</b><span class="muted small">{{$away.Short}}</span></div>
+        <div class="mp-ring" style="--a: {{color $.AwayColor}}; --h: {{color $.HomeColor}}; --p: {{printf "%.2f" .HomePct}}%">
+          <div class="mp-in">{{template "teamlogo" $away}}{{template "teamlogo" $home}}</div>
+        </div>
+        <div class="mp-side r"><b>{{printf "%.1f" .HomePct}}%</b><span class="muted small">{{$home.Short}}</span></div>
+      </div>
+      <div class="card-f muted">Projected score: {{$away.Short}} {{printf "%.0f" .AwayPts}}, {{$home.Short}} {{printf "%.0f" .HomePts}}.
+        {{if .Games}}Based on {{.Games}} games played this season{{else}}Based on last season's results{{end}}{{if $g.Week}}, before week {{$g.Week}}{{end}}.</div>
+    </div>
+    {{end}}
+  </div>
+
+  <div>
+    {{template "gamestories" .}}
+    {{if and .CanEdit (not .HasPreview)}}<p><a class="btn btn-ghost" href="/write?game={{.Year}}/{{$g.Row}}&kind=preview">Write a preview</a></p>{{end}}
+
+    {{if .Leaders}}
+    <div class="card">
+      <h2>Season Leaders</h2>
+      <div class="pl-head"><span class="tm">{{template "teamlogo" $away}}{{$away.Short}}</span><span class="tm">{{$home.Short}}{{template "teamlogo" $home}}</span></div>
+      {{range .Leaders}}
+      <div class="pl-row">
+        {{with .Away}}<img class="hs" src="{{portrait .Player.Portrait}}" alt="" loading="lazy"><div class="who"><a href="/player/{{.Player.ID}}">{{.Player.Short}}</a> <span class="muted small">{{.Player.Position}}</span><div>{{.Detail}}</div></div><span class="val">{{.Value}}</span>{{else}}<span></span><span class="who muted small">—</span><span></span>{{end}}
+        <span class="cat">{{.Name}}</span>
+        {{with .Home}}<span class="val">{{.Value}}</span><div class="who r"><a href="/player/{{.Player.ID}}">{{.Player.Short}}</a> <span class="muted small">{{.Player.Position}}</span><div>{{.Detail}}</div></div><img class="hs" src="{{portrait .Player.Portrait}}" alt="" loading="lazy">{{else}}<span></span><span class="who r muted small">—</span><span></span>{{end}}
+      </div>
+      {{end}}
+      <div class="card-f"><a href="/team/{{$away.ID}}/stats?season={{.Year}}">{{$away.Short}} stats</a> · <a href="/team/{{$home.ID}}/stats?season={{.Year}}">{{$home.Short}} stats</a></div>
+    </div>
+    {{end}}
+
+    {{if .Matchup}}
+    <div class="card">
+      <h2>Team Stats <a class="small" href="/stats/teams?season={{.Year}}">Compare all teams</a></h2>
+      <table class="tbl cmp">
+        <thead><tr><th class="l">{{$away.Short}}</th><th class="c">Per Game</th><th>{{$home.Short}}</th></tr></thead>
+        <tbody>{{range .Matchup}}<tr><td class="l">{{.Away}} <span class="sub">#{{.AwayRank}}</span></td><td class="c muted">{{.Label}}</td><td><span class="sub">#{{.HomeRank}}</span> {{.Home}}</td></tr>{{end}}</tbody>
+      </table>
+      <div class="card-f muted">Ranks are among all FBS teams.</div>
+    </div>
+    {{end}}
+  </div>
+
+  <div>
+    {{with .Line}}
+    <div class="card">
+      <h2>Game Odds</h2>
+      <table class="tbl odds">
+        <thead><tr><th class="l"></th><th>Spread</th><th>Total</th><th>ML</th></tr></thead>
+        <tbody>
+          <tr><td class="l"><b>{{$away.Short}}</b><div class="muted small">{{$away.Record}}</div></td><td><span class="ob">{{.AwaySpread}}<small>-110</small></span></td><td><span class="ob">o{{.Total}}<small>-110</small></span></td><td><span class="ob">{{.AwayML}}</span></td></tr>
+          <tr><td class="l"><b>{{$home.Short}}</b><div class="muted small">{{$home.Record}}</div></td><td><span class="ob">{{.HomeSpread}}<small>-110</small></span></td><td><span class="ob">u{{.Total}}<small>-110</small></span></td><td><span class="ob">{{.HomeML}}</span></td></tr>
+        </tbody>
+      </table>
+      <div class="card-f muted">DSN line, set from this season's scores.</div>
+    </div>
+    {{end}}
+
+    {{range .Standings}}
+    <div class="card">
+      <h2><span class="tm">{{with confLogo .Conference}}<img src="{{.}}" alt="">{{end}}{{$.Year}} {{.Conference}} Standings</span></h2>
+      {{range .Divisions}}
+      {{if .Name}}<div class="div-h">{{.Name}}</div>{{end}}
+      <table class="tbl">
+        <thead><tr><th class="l">Team</th><th>Conf</th><th>Ovr</th></tr></thead>
+        <tbody>{{range .Teams}}<tr class="{{if or (eq .ID $away.ID) (eq .ID $home.ID)}}hl{{end}}"><td class="l"><a href="{{teamURL .}}">{{.Name}}</a></td><td>{{.ConfRecord}}</td><td>{{.Record}}</td></tr>{{end}}</tbody>
+      </table>
+      {{end}}
+      <div class="card-f"><a href="/standings?season={{$.Year}}">Full standings</a></div>
+    </div>
+    {{end}}
+  </div>
+</div>
 {{end}}
 
 {{define "boxteam"}}{{$t := .T}}{{$tb := .Tbl}}

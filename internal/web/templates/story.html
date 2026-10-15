@@ -17,7 +17,7 @@
       <tr><td>{{.Home.Short}}</td>{{range $i, $q := $.Quarters}}<td>{{if eq $q "OT"}}{{$g.HomeOT}}{{else}}{{q $g.HomeQ $i}}{{end}}</td>{{end}}<td><b>{{$g.HomeScore}}</b></td></tr>
     </table>
     {{end}}
-    <a class="small" href="/game/{{.Year}}/{{$g.Row}}">Box Score »</a>
+    <a class="small" href="/game/{{.Year}}/{{$g.Row}}">{{if $g.Played}}Box Score{{else}}Matchup{{end}} »</a>
   </div>
   <div class="ss-team home {{if and $g.Played (not (winner $g true))}}lose{{end}}">
     {{if $g.Played}}<div class="sc">{{$g.HomeScore}}</div>{{end}}

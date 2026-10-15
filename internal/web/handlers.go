@@ -515,6 +515,8 @@ func (s *Site) game(r *http.Request, c *store.Ctx) (string, data, error) {
 		lines  []*store.Line
 		plays  []*store.ScoringPlay
 		recaps []*store.Article
+		cur    []store.Result
+		last   []store.Result
 	)
 	err := parallel(
 		func() (err error) { g, err = s.q.Game(ctx, c, season, row); return },
@@ -525,6 +527,7 @@ func (s *Site) game(r *http.Request, c *store.Ctx) (string, data, error) {
 			recaps, err = s.q.Articles(ctx, c, store.ArticleFilter{Team: -1, Season: season, Game: row, Drafts: canEdit(r), Limit: 5})
 			return
 		},
+		func() (err error) { cur, last, err = s.seasonResults(ctx, c, season); return },
 	)
 	if err != nil {
 		return "", nil, err
@@ -570,9 +573,31 @@ func (s *Site) game(r *http.Request, c *store.Ctx) (string, data, error) {
 		}
 		boxCats = append(boxCats, BoxCategory{Name: t.Name, Away: a, Home: h})
 	}
-	return "game", data{"G": g, "Away": away, "Home": home, "Box": boxCats, "Recaps": s.storyCards(teams, recaps),
+	d := data{"G": g, "Away": away, "Home": home, "Box": boxCats, "Stories": s.storyCards(teams, recaps),
 		"TeamStats": teamBoxRows(g.AwayBox, g.HomeBox), "Scoring": scoringLines(g, plays, lines), "HasScoring": len(plays) > 0,
-		"Season": season, "Year": c.YearOf(season), "Quarters": quarterCols(g)}, nil
+		"Season": season, "Year": c.YearOf(season), "Quarters": quarterCols(g)}
+	for _, a := range recaps {
+		if a.IsPreview() {
+			d["HasPreview"] = true
+		} else {
+			d["HasRecap"] = true
+		}
+	}
+	// Played games show the line they carried into kickoff in the info bar.
+	d["Pred"], d["Line"] = prediction(cur, last, g)
+	if !g.Played {
+		pv, err := s.preview(ctx, c, g, teams, away, home)
+		if err != nil {
+			return "", nil, err
+		}
+		for k, v := range pv {
+			d[k] = v
+		}
+	}
+	if l, ok := d["Line"].(*Line); ok {
+		d["LineFav"] = teamOr(teams, l.Favorite)
+	}
+	return "game", d, nil
 }
 
 func quarterCols(g *store.Game) []string {
@@ -1049,7 +1074,12 @@ func (s *Site) teamStats(r *http.Request, c *store.Ctx) (string, data, error) {
 			tables = append(tables, rt)
 		}
 	}
-	games := t.W + t.L
+	// Per-game averages divide by the stats row's own game count; the team
+	// record can lag it by a game mid-week.
+	games := int(t.Stats["WINS"] + t.Stats["LOSSES"] + t.Stats["TIES"])
+	if games == 0 {
+		games = t.W + t.L
+	}
 	return "teamstats", data{"T": t, "Season": season, "Tables": tables, "Summary": teamSeasonRows(t.Stats, games), "Tab": "stats"}, nil
 }
 

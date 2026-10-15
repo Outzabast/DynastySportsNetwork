@@ -9,7 +9,7 @@
   <div>
     {{with .Summary}}
     <div class="card">
-      <h2>Team Totals</h2>
+      <h2>Team Totals <a href="/stats/teams?season={{year .C .Season}}&conf={{.T.Conference}}">Compare teams</a></h2>
       <table class="tbl cmp"><thead><tr><th></th><th>Total</th><th>Per Game</th></tr></thead>
         <tbody>{{range .}}<tr><td>{{.Label}}</td><td>{{.Away}}</td><td>{{.Home}}</td></tr>{{end}}</tbody></table>
     </div>

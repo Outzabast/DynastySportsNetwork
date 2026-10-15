@@ -16,7 +16,7 @@
       <a href="/scoreboard" {{if eq .Path "/scoreboard"}}class="on"{{end}}>Scores</a>
       <a href="/standings" {{if eq .Path "/standings"}}class="on"{{end}}>Standings</a>
       <a href="/rankings" {{if eq .Path "/rankings"}}class="on"{{end}}>Rankings</a>
-      <a href="/stats" {{if eq .Path "/stats"}}class="on"{{end}}>Stats</a>
+      <a href="/stats" {{if or (eq .Path "/stats") (eq .Path "/stats/teams")}}class="on"{{end}}>Stats</a>
       <a href="/teams" {{if eq .Path "/teams"}}class="on"{{end}}>Teams</a>
       <a href="/coaches" {{if eq .Path "/coaches"}}class="on"{{end}}>Coaches</a>
       <a href="/awards" {{if eq .Path "/awards"}}class="on"{{end}}>Awards</a>

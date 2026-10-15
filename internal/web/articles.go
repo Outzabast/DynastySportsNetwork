@@ -161,7 +161,8 @@ func (s *Site) story(r *http.Request, c *store.Ctx) (string, data, error) {
 	return "story", d, nil
 }
 
-// editor serves the write/edit form. ?game=2034/865 prefills a recap.
+// editor serves the write/edit form. ?game=2034/865 prefills a game story:
+// a preview when the game is unplayed (or ?kind=preview), else a recap.
 func (s *Site) editor(r *http.Request, c *store.Ctx) (string, data, error) {
 	if !canEdit(r) {
 		return "", nil, errNotFound
@@ -180,8 +181,15 @@ func (s *Site) editor(r *http.Request, c *store.Ctx) (string, data, error) {
 	} else if g := r.URL.Query().Get("game"); g != "" {
 		if season, row, ok := parseGameRef(c, g); ok {
 			a.Season, a.GameRow = &season, &row
+			a.Kind = "recap"
 			if game, err := s.q.Game(ctx, c, season, row); err == nil && game != nil {
 				a.TeamIDs = []int{game.Away, game.Home}
+				if !game.Played {
+					a.Kind = "preview"
+				}
+			}
+			if k := r.URL.Query().Get("kind"); k == "preview" || k == "recap" {
+				a.Kind = k
 			}
 		}
 	}
@@ -272,9 +280,12 @@ func (s *Site) saveStory(w http.ResponseWriter, r *http.Request, c *store.Ctx) (
 	a.Image = strings.TrimSpace(f.Get("image"))
 	a.ImageCaption = strings.TrimSpace(f.Get("image_caption"))
 	a.Published = f.Get("publish") == "1"
-	a.Season, a.GameRow = nil, nil
+	a.Season, a.GameRow, a.Kind = nil, nil, ""
 	if season, row, ok := parseGameRef(c, f.Get("game")); ok {
-		a.Season, a.GameRow = &season, &row
+		a.Season, a.GameRow, a.Kind = &season, &row, "recap"
+		if f.Get("kind") == "preview" {
+			a.Kind = "preview"
+		}
 	}
 	a.TeamIDs = nil
 	for _, v := range f["team"] {

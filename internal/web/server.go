@@ -148,6 +148,7 @@ func (s *Site) routes() http.Handler {
 	mux.HandleFunc("POST /write/upload", s.action(s.upload))
 	mux.HandleFunc("GET /player/{id}", s.page(s.player))
 	mux.HandleFunc("GET /stats", s.page(s.leaders))
+	mux.HandleFunc("GET /stats/teams", s.page(s.teamCompare))
 	mux.HandleFunc("GET /awards", s.page(s.awards))
 	mux.HandleFunc("GET /records", s.page(s.records))
 	mux.HandleFunc("GET /recruiting", s.page(s.recruiting))

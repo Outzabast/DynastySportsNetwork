@@ -1,0 +1,20 @@
+{{define "title"}}Team {{.Table.Name}} Stats{{end}}
+{{define "content"}}
+<h1 class="page-title">{{year .C .Season}} {{.Scope}} Team {{.Table.Name}} Stats</h1>
+<div class="filters"><a class="pill" href="/stats?season={{year .C .Season}}&conf={{.Conf}}">Players</a><a class="pill on" href="/stats/teams?season={{year .C .Season}}&conf={{.Conf}}">Teams</a></div>
+<form class="filters" method="get">
+  <input type="hidden" name="cat" value="{{.Cat}}"><input type="hidden" name="mode" value="{{.Mode}}">
+  <select name="season" onchange="this.form.submit()">{{$sel := .Season}}{{$c := .C}}{{range .C.Seasons}}<option value="{{year $c .}}" {{if eq . $sel}}selected{{end}}>{{year $c .}}</option>{{end}}</select>
+  <select name="conf" onchange="this.form.submit()"><option value="">All FBS</option>{{$conf := .Conf}}{{range .Confs}}<option {{if eq . $conf}}selected{{end}}>{{.}}</option>{{end}}</select>
+  <span class="seg"><a class="{{if .PerGame}}on{{end}}" href="/stats/teams?cat={{.Cat}}&season={{year .C .Season}}&conf={{.Conf}}&sort={{.Sort}}">Per Game</a><a class="{{if not .PerGame}}on{{end}}" href="/stats/teams?cat={{.Cat}}&season={{year .C .Season}}&conf={{.Conf}}&sort={{.Sort}}&mode=total">Total</a></span>
+</form>
+<div class="filters">{{range .Tables}}<a class="pill {{if eq .ID $.Cat}}on{{end}}" href="/stats/teams?cat={{.ID}}&season={{year $.C $.Season}}&conf={{$.Conf}}&mode={{$.Mode}}">{{.Name}}</a>{{end}}</div>
+<div class="card">
+  {{if .Rows}}
+  <div class="tbl-wrap"><table class="tbl">
+    <thead><tr><th class="l">RK</th><th class="l">Team</th>{{range $i, $h := .Cols}}<th title="{{$h.Title}}" class="{{if eq $i $.Sort}}sorted{{end}}"><a href="/stats/teams?cat={{$.Cat}}&season={{year $.C $.Season}}&conf={{$.Conf}}&mode={{$.Mode}}&sort={{$i}}">{{$h.Key}}</a></th>{{end}}</tr></thead>
+    <tbody>{{range .Rows}}<tr><td>{{.Rank}}</td><td class="l"><a class="tm" href="{{teamURL .Team}}">{{template "teamlogo" .Team}}{{.Team.Name}}</a>{{if not $.Conf}}<span class="sub">{{.Team.Conference}}</span>{{end}}</td>{{range .Cells}}<td>{{.}}</td>{{end}}</tr>{{end}}</tbody>
+  </table></div>
+  {{else}}<div class="card-b muted">No team stats recorded for this season.</div>{{end}}
+</div>
+{{end}}

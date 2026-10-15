@@ -1,6 +1,7 @@
 {{define "title"}}Stat Leaders{{end}}
 {{define "content"}}
 <h1 class="page-title">{{year .C .Season}} College Football Stat Leaders</h1>
+<div class="filters"><a class="pill on" href="/stats?season={{year .C .Season}}&conf={{.Conf}}">Players</a><a class="pill" href="/stats/teams?season={{year .C .Season}}&conf={{.Conf}}">Teams</a></div>
 <form class="filters" method="get">
   <select name="season" onchange="this.form.submit()">{{$sel := .Season}}{{$c := .C}}{{range .C.Seasons}}<option value="{{year $c .}}" {{if eq . $sel}}selected{{end}}>{{year $c .}}</option>{{end}}</select>
   <select name="conf" onchange="this.form.submit()"><option value="">All FBS</option>{{$conf := .Conf}}{{range .Confs}}<option {{if eq . $conf}}selected{{end}}>{{.}}</option>{{end}}</select>

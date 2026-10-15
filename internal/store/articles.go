@@ -22,8 +22,9 @@ type Article struct {
 	Body         string // Markdown
 	Image        string // site path, e.g. /media/articles/2034-week15.jpg
 	ImageCaption string
-	Season       *int // linked game, when the story is a recap
+	Season       *int // linked game, when the story is a preview or recap
 	GameRow      *int
+	Kind         string // "preview" or "recap" for game stories, else ""
 	TeamIDs      []int
 	PersonIDs    []uuid.UUID
 	Published    bool
@@ -43,6 +44,20 @@ func (a *Article) When() time.Time {
 // HasGame reports whether the story is tied to a game.
 func (a *Article) HasGame() bool { return a.Season != nil && a.GameRow != nil }
 
+// IsPreview reports whether the story previews its game.
+func (a *Article) IsPreview() bool { return a.HasGame() && a.Kind == "preview" }
+
+// Label names a game story's kind for readers ("" for other stories).
+func (a *Article) Label() string {
+	switch {
+	case a.IsPreview():
+		return "Preview"
+	case a.HasGame():
+		return "Recap"
+	}
+	return ""
+}
+
 var slugJunk = regexp.MustCompile(`[^a-z0-9]+`)
 
 // Slugify makes a URL slug from a headline.
@@ -58,13 +73,13 @@ func Slugify(s string) string {
 }
 
 const articleCols = `id, dynasty_id, slug, headline, dek, byline, body, image, image_caption, season_index, game_row, team_ids, person_ids,
-	published, published_at, created_at, updated_at`
+	published, published_at, created_at, updated_at, kind`
 
 func scanArticle(row interface{ Scan(...any) error }) (*Article, error) {
 	a := &Article{}
 	var teams []int32
 	err := row.Scan(&a.ID, &a.Dynasty, &a.Slug, &a.Headline, &a.Dek, &a.Byline, &a.Body, &a.Image, &a.ImageCaption, &a.Season, &a.GameRow,
-		&teams, &a.PersonIDs, &a.Published, &a.PublishedAt, &a.CreatedAt, &a.UpdatedAt)
+		&teams, &a.PersonIDs, &a.Published, &a.PublishedAt, &a.CreatedAt, &a.UpdatedAt, &a.Kind)
 	for _, t := range teams {
 		a.TeamIDs = append(a.TeamIDs, int(t))
 	}
@@ -126,16 +141,16 @@ func (q *Queries) SaveArticle(ctx context.Context, c *Ctx, a *Article) (int, err
 	}
 	if a.ID == 0 {
 		err := q.s.DB.QueryRow(ctx, `INSERT INTO article (dynasty_id, slug, headline, dek, byline, body, image, image_caption, season_index, game_row,
-			team_ids, person_ids, published, published_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::int[], $12::uuid[], $13, CASE WHEN $13 THEN now() END) RETURNING id`,
-			c.Dynasty, a.Slug, a.Headline, a.Dek, a.Byline, a.Body, a.Image, a.ImageCaption, a.Season, a.GameRow, teams, persons, a.Published).Scan(&a.ID)
+			team_ids, person_ids, published, published_at, kind)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::int[], $12::uuid[], $13, CASE WHEN $13 THEN now() END, $14) RETURNING id`,
+			c.Dynasty, a.Slug, a.Headline, a.Dek, a.Byline, a.Body, a.Image, a.ImageCaption, a.Season, a.GameRow, teams, persons, a.Published, a.Kind).Scan(&a.ID)
 		return a.ID, err
 	}
 	tag, err := q.s.DB.Exec(ctx, `UPDATE article SET slug = $3, headline = $4, dek = $5, byline = $6, body = $7, image = $8, image_caption = $9,
 		season_index = $10, game_row = $11, team_ids = $12::int[], person_ids = $13::uuid[], published = $14,
-		published_at = CASE WHEN $14 AND published_at IS NULL THEN now() ELSE published_at END, updated_at = now()
+		published_at = CASE WHEN $14 AND published_at IS NULL THEN now() ELSE published_at END, updated_at = now(), kind = $15
 		WHERE dynasty_id = $1 AND id = $2`,
-		c.Dynasty, a.ID, a.Slug, a.Headline, a.Dek, a.Byline, a.Body, a.Image, a.ImageCaption, a.Season, a.GameRow, teams, persons, a.Published)
+		c.Dynasty, a.ID, a.Slug, a.Headline, a.Dek, a.Byline, a.Body, a.Image, a.ImageCaption, a.Season, a.GameRow, teams, persons, a.Published, a.Kind)
 	if err == nil && tag.RowsAffected() == 0 {
 		err = errors.New("article not found")
 	}

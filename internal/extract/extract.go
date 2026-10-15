@@ -347,10 +347,17 @@ func (x *extractor) teams(snap *Snapshot) {
 		}
 		snap.Teams = append(snap.Teams, t)
 
-		// Season team totals: every TeamStats column.
+		// Season team totals: every TeamStats column. TeamSeasonStats is a
+		// TeamStats[] array holding the current season in slot 0 and the
+		// previous seasons after it; take slot 0 only (null slots are not
+		// compacted, so index by key rather than via arrayRefs).
 		if ref := refF(r, "TeamSeasonStats"); ref != nil {
-			if row, ok := x.f.RecordByReference("TeamStats", ref); ok {
-				snap.TeamSeasonStats = append(snap.TeamSeasonStats, TeamSeasonStat{TeamID: t.ID, Stats: statsOf(row)})
+			if arr, ok := x.f.RecordByReference("TeamStats[]", ref); ok {
+				if cur := refF(arr, "0"); cur != nil {
+					if row, ok := x.f.RecordByReference("TeamStats", cur); ok {
+						snap.TeamSeasonStats = append(snap.TeamSeasonStats, TeamSeasonStat{TeamID: t.ID, Stats: statsOf(row)})
+					}
+				}
 			}
 		}
 	}

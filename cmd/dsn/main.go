@@ -13,7 +13,8 @@ commands:
   serve     run the website and the save watcher (default)
   ingest    ingest one save file (copies it first) and exit
   reingest  re-ingest every archived save in timeline order
-  extract   print a summary of what a save contains (debug)`)
+  extract   print a summary of what a save contains (debug)
+  backfill-team-stats  refill empty team season totals from the archive`)
 }
 
 func main() {
@@ -31,6 +32,8 @@ func main() {
 		err = runIngest(args)
 	case "reingest":
 		err = runReingest(args)
+	case "backfill-team-stats":
+		err = runBackfillTeamStats(args)
 	case "extract":
 		err = runExtract(args)
 	default:

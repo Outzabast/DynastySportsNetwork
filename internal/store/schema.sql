@@ -477,3 +477,7 @@ CREATE TABLE IF NOT EXISTS article (
 );
 CREATE INDEX IF NOT EXISTS article_dynasty ON article(dynasty_id, published, published_at DESC);
 CREATE INDEX IF NOT EXISTS article_game ON article(dynasty_id, season_index, game_row);
+
+-- Game stories are either a preview (written before kickoff) or a recap.
+-- Older game-linked stories have kind '' and read as recaps.
+ALTER TABLE article ADD COLUMN IF NOT EXISTS kind text NOT NULL DEFAULT '';

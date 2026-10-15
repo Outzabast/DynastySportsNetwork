@@ -318,7 +318,9 @@ func teamBoxRows(away, home S) []boxRow {
 		r("1st Downs", i("FIRSTDOWNS"), false),
 		r("3rd down efficiency", func(s S) string { return fmt.Sprintf("%d-%d", s["THIRDDOWNCONV"], s["THIRDDOWNS"]) }, false),
 		r("4th down efficiency", func(s S) string { return fmt.Sprintf("%d-%d", s["FOURTHDOWNCONV"], s["FOURTHDOWNS"]) }, false),
-		r("Total Yards", i("TOTALYARDS"), false),
+		// TOTALYARDS also counts kick and punt return yards; ESPN total yards is
+		// passing + rushing, which the game keeps as OFFYARDS.
+		r("Total Yards", i("OFFYARDS"), false),
 		r("Passing", i("OFFPASSYARDS"), false),
 		r("Comp-Att", func(s S) string { return fmt.Sprintf("%d-%d", s["PASSCOMPLETIONS"], s["PASSATTEMPTS"]) }, true),
 		r("Yards per pass", func(s S) string { return ratio(s["OFFPASSYARDS"], s["PASSATTEMPTS"], 1) }, true),
@@ -352,7 +354,7 @@ func teamSeasonRows(s S, games int) []boxRow {
 	}
 	row := func(label string, total string, per string) boxRow { return boxRow{label, total, per, false} }
 	return []boxRow{
-		row("Total Yards", fmt.Sprint(s["TOTALYARDS"]), pg("TOTALYARDS")),
+		row("Total Yards", fmt.Sprint(s["OFFYARDS"]), pg("OFFYARDS")),
 		row("Passing Yards", fmt.Sprint(s["OFFPASSYARDS"]), pg("OFFPASSYARDS")),
 		row("Rushing Yards", fmt.Sprint(s["OFFRUSHYARDS"]), pg("OFFRUSHYARDS")),
 		row("Passing TD", fmt.Sprint(s["PASSTDS"]), pg("PASSTDS")),
@@ -365,6 +367,12 @@ func teamSeasonRows(s S, games int) []boxRow {
 		row("Turnovers (Giveaways)", fmt.Sprint(s["GIVEAWAYS"]), pg("GIVEAWAYS")),
 		row("Takeaways", fmt.Sprint(s["TAKEAWAYS"]), pg("TAKEAWAYS")),
 		row("Sacks", fmt.Sprint(s["SACKS"]), pg("SACKS")),
+		row("Total Yards Allowed", fmt.Sprint(s["DEFPASSYARDS"]+s["DEFRUSHYARDS"]), func() string {
+			if games == 0 {
+				return "-"
+			}
+			return fmt.Sprintf("%.1f", float64(s["DEFPASSYARDS"]+s["DEFRUSHYARDS"])/float64(games))
+		}()),
 		row("Passing Yards Allowed", fmt.Sprint(s["DEFPASSYARDS"]), pg("DEFPASSYARDS")),
 		row("Rushing Yards Allowed", fmt.Sprint(s["DEFRUSHYARDS"]), pg("DEFRUSHYARDS")),
 		row("Defensive Interceptions", fmt.Sprint(s["DEFINTS"]), pg("DEFINTS")),

@@ -476,6 +476,71 @@ func (q *Queries) TeamGames(ctx context.Context, c *Ctx, season, team int) ([]*G
 	return scanGames(rows)
 }
 
+// TeamPoints is a team's scoring from played games in one season.
+type TeamPoints struct {
+	Games, For, Against int
+}
+
+// SeasonPoints totals points scored and allowed per team over a season's
+// played games (the TeamStats row carries no points).
+func (q *Queries) SeasonPoints(ctx context.Context, c *Ctx, season int) (map[int]TeamPoints, error) {
+	rows, err := q.s.DB.Query(ctx, `SELECT home_team, away_team, home_score, away_score FROM game
+		WHERE branch_id = $1 AND season_index = $2 AND played`, c.Branch, season)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[int]TeamPoints{}
+	for rows.Next() {
+		var h, a, hs, as int
+		if err := rows.Scan(&h, &a, &hs, &as); err != nil {
+			return nil, err
+		}
+		for _, side := range [][3]int{{h, hs, as}, {a, as, hs}} {
+			tp := out[side[0]]
+			tp.Games++
+			tp.For += side[1]
+			tp.Against += side[2]
+			out[side[0]] = tp
+		}
+	}
+	return out, rows.Err()
+}
+
+// Result is the slim view of a game the predictor needs.
+type Result struct {
+	Week                 int
+	Home, Away           int
+	HomeScore, AwayScore int
+	Played               bool
+	Neutral              bool // conference title games, bowls and playoffs
+}
+
+// SeasonResults lists every game of a season (played or not) without box
+// scores, in week order.
+func (q *Queries) SeasonResults(ctx context.Context, c *Ctx, season int) ([]Result, error) {
+	rows, err := q.s.DB.Query(ctx, `SELECT week, home_team, away_team, home_score, away_score, played, game_type, bowl_name FROM game
+		WHERE branch_id = $1 AND season_index = $2 ORDER BY week, game_row`, c.Branch, season)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Result
+	for rows.Next() {
+		var r Result
+		var g Game
+		if err := rows.Scan(&r.Week, &r.Home, &r.Away, &r.HomeScore, &r.AwayScore, &r.Played, &g.GameType, &g.BowlName); err != nil {
+			return nil, err
+		}
+		switch g.Kind() {
+		case "conf_championship", "bowl", "playoff", "national_championship":
+			r.Neutral = true
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // Game returns one game.
 func (q *Queries) Game(ctx context.Context, c *Ctx, season, row int) (*Game, error) {
 	rows, err := q.s.DB.Query(ctx, `SELECT `+gameCols+` FROM game WHERE branch_id = $1 AND season_index = $2 AND game_row = $3`, c.Branch, season, row)

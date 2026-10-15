@@ -45,8 +45,9 @@
       </div>
       <div class="card card-b">
         <h3 class="ed-h">Game</h3>
-        <label>Recap of game <span class="muted">(paste a box score link)</span><input name="game" value="{{.GameRef}}" placeholder="/game/2034/865"></label>
-        <p class="muted small">A recap shows the score strip above the story and appears on the game's page.</p>
+        <label>Game <span class="muted">(paste a game link)</span><input name="game" value="{{.GameRef}}" placeholder="/game/2034/865"></label>
+        <label>Story type<select name="kind"><option value="preview" {{if $a.IsPreview}}selected{{end}}>Preview</option><option value="recap" {{if not $a.IsPreview}}selected{{end}}>Recap</option></select></label>
+        <p class="muted small">Game stories show the score strip above the story and appear on the game's page. Previews lead the matchup page before kickoff.</p>
       </div>
       <div class="card card-b">
         <h3 class="ed-h">Teams</h3>

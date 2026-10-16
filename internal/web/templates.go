@@ -84,26 +84,7 @@ func (s *Site) funcs() template.FuncMap {
 			}
 			return "-"
 		},
-		"result": func(g *store.Game, team int) string {
-			if !g.Played {
-				return ""
-			}
-			us, them := g.HomeScore, g.AwayScore
-			if g.Away == team {
-				us, them = them, us
-			}
-			wl := "W"
-			if us < them {
-				wl = "L"
-			} else if us == them {
-				wl = "T"
-			}
-			ot := ""
-			if g.Overtime {
-				ot = " OT"
-			}
-			return fmt.Sprintf("%s %d-%d%s", wl, us, them, ot)
-		},
+		"result": gameResult,
 		"isWin": func(g *store.Game, team int) bool {
 			if g.Home == team {
 				return g.HomeScore > g.AwayScore
@@ -271,7 +252,10 @@ func classYear(year, redshirt string) string {
 	if abbr == "" {
 		abbr = year
 	}
-	if strings.Contains(strings.ToLower(redshirt), "redshirted") || strings.EqualFold(redshirt, "Redshirt") {
+	// The save's RedshirtStatus is Eligible (redshirt still available),
+	// Ineligible (played past the limit, never redshirted) or Previous
+	// (redshirt used in an earlier season). Only Previous is a redshirt.
+	if redshirt == "Previous" {
 		abbr = "RS " + abbr
 	}
 	return abbr
@@ -330,4 +314,26 @@ func ordinal(n int) string {
 		}
 	}
 	return fmt.Sprintf("%d%s", n, suf)
+}
+
+// gameResult is a played game's result from one team's side, e.g. "W 31-24 OT".
+func gameResult(g *store.Game, team int) string {
+	if !g.Played {
+		return ""
+	}
+	us, them := g.HomeScore, g.AwayScore
+	if g.Away == team {
+		us, them = them, us
+	}
+	wl := "W"
+	if us < them {
+		wl = "L"
+	} else if us == them {
+		wl = "T"
+	}
+	ot := ""
+	if g.Overtime {
+		ot = " OT"
+	}
+	return fmt.Sprintf("%s %d-%d%s", wl, us, them, ot)
 }

@@ -158,6 +158,11 @@ func (s *Site) routes() http.Handler {
 	mux.HandleFunc("GET /dynasties", s.page(s.dynasties))
 	mux.HandleFunc("GET /dynasty/{id}", s.switchDynasty)
 
+	mux.HandleFunc("GET /team/{id}/export/stats", s.export(s.exportTeamStats))
+	mux.HandleFunc("GET /team/{id}/export/season", s.export(s.exportSeason))
+	mux.HandleFunc("GET /stats/teams/export", s.export(s.exportTeamCompare))
+	mux.HandleFunc("GET /player/{id}/export", s.export(s.exportPlayer))
+
 	mux.HandleFunc("GET /api/scoreboard", s.api(s.apiScoreboard))
 	mux.HandleFunc("GET /api/game/{season}/{row}", s.api(s.apiGame))
 	mux.HandleFunc("GET /api/team/{id}", s.api(s.apiTeam))

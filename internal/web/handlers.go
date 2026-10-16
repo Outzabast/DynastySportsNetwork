@@ -548,44 +548,7 @@ func (s *Site) game(r *http.Request, c *store.Ctx) (string, data, error) {
 		return "", nil, errNotFound
 	}
 	away, home := teamOr(teams, g.Away), teamOr(teams, g.Home)
-	box := func(t Table, team int) *RenderedTable {
-		rt := &RenderedTable{ID: t.ID, Name: t.Name, Headers: t.Cols}
-		total := store.Stats{}
-		for _, l := range lines {
-			if l.TeamID != team || !t.groupOK(l.Group) || !t.Has(l.Stats) {
-				continue
-			}
-			total.Add(l.Stats)
-			row := Row{Label: l.Player.Name(), Href: "/player/" + l.Player.ID.String(), sortV: t.Cols[t.SortBy].Num(l.Stats)}
-			if l.Player.Jersey > 0 {
-				row.Sub = fmt.Sprintf("#%d", l.Player.Jersey)
-			}
-			for _, col := range t.Cols {
-				row.Cells = append(row.Cells, col.Val(l.Stats))
-			}
-			rt.Rows = append(rt.Rows, row)
-		}
-		sortRows(rt.Rows)
-		if len(rt.Rows) > 0 {
-			tr := Row{Label: "TEAM"}
-			for _, col := range t.Cols {
-				tr.Cells = append(tr.Cells, col.Val(total))
-			}
-			rt.Total = &tr
-		}
-		return rt
-	}
-	// ESPN layout: one row per category, away and home side by side. A
-	// category is shown when either team has an entry.
-	var boxCats []BoxCategory
-	for _, t := range boxTables {
-		a, h := box(t, g.Away), box(t, g.Home)
-		if len(a.Rows)+len(h.Rows) == 0 {
-			continue
-		}
-		boxCats = append(boxCats, BoxCategory{Name: t.Name, Away: a, Home: h})
-	}
-	d := data{"G": g, "Away": away, "Home": home, "Box": boxCats, "Stories": s.storyCards(teams, recaps),
+	d := data{"G": g, "Away": away, "Home": home, "Box": boxCategories(g, lines), "Stories": s.storyCards(teams, recaps),
 		"TeamStats": teamBoxRows(g.AwayBox, g.HomeBox), "Scoring": scoringLines(g, plays, lines), "HasScoring": len(plays) > 0,
 		"Season": season, "Year": c.YearOf(season), "Quarters": quarterCols(g)}
 	for _, a := range recaps {
@@ -610,6 +573,49 @@ func (s *Site) game(r *http.Request, c *store.Ctx) (string, data, error) {
 		d["LineFav"] = teamOr(teams, l.Favorite)
 	}
 	return "game", d, nil
+}
+
+// boxTable is one team's table for a box score category.
+func boxTable(t Table, lines []*store.Line, team int) *RenderedTable {
+	rt := &RenderedTable{ID: t.ID, Name: t.Name, Headers: t.Cols}
+	total := store.Stats{}
+	for _, l := range lines {
+		if l.TeamID != team || !t.groupOK(l.Group) || !t.Has(l.Stats) {
+			continue
+		}
+		total.Add(l.Stats)
+		row := Row{Label: l.Player.Name(), Href: "/player/" + l.Player.ID.String(), sortV: t.Cols[t.SortBy].Num(l.Stats)}
+		if l.Player.Jersey > 0 {
+			row.Sub = fmt.Sprintf("#%d", l.Player.Jersey)
+		}
+		for _, col := range t.Cols {
+			row.Cells = append(row.Cells, col.Val(l.Stats))
+		}
+		rt.Rows = append(rt.Rows, row)
+	}
+	sortRows(rt.Rows)
+	if len(rt.Rows) > 0 {
+		tr := Row{Label: "TEAM"}
+		for _, col := range t.Cols {
+			tr.Cells = append(tr.Cells, col.Val(total))
+		}
+		rt.Total = &tr
+	}
+	return rt
+}
+
+// boxCategories is the ESPN layout: one row per category, away and home side
+// by side. A category is shown when either team has an entry.
+func boxCategories(g *store.Game, lines []*store.Line) []BoxCategory {
+	var out []BoxCategory
+	for _, t := range boxTables {
+		a, h := boxTable(t, lines, g.Away), boxTable(t, lines, g.Home)
+		if len(a.Rows)+len(h.Rows) == 0 {
+			continue
+		}
+		out = append(out, BoxCategory{Name: t.Name, Away: a, Home: h})
+	}
+	return out
 }
 
 func quarterCols(g *store.Game) []string {
@@ -1077,22 +1083,33 @@ func (s *Site) teamStats(r *http.Request, c *store.Ctx) (string, data, error) {
 	if err != nil {
 		return "", nil, err
 	}
+	return "teamstats", data{"T": t, "Season": season, "Tables": teamPlayerTables(lines), "Summary": teamSeasonRows(t.Stats, statGames(t)), "Tab": "stats"}, nil
+}
+
+// teamPlayerTables is a team's player season stats, one table per category.
+func teamPlayerTables(lines []*store.SeasonLine) []RenderedTable {
 	var tables []RenderedTable
 	for _, tb := range seasonTables {
 		rt := renderSeasonTable(tb, lines, func(l *store.SeasonLine) Row {
-			return Row{Label: l.Player.Name(), Href: "/player/" + l.Player.ID.String(), Sub: l.Player.Position}
+			return Row{Label: l.Player.Name(), Href: "/player/" + l.Player.ID.String(), Sub: l.Player.Position,
+				Class: classYear(l.Player.ClassYear, l.Redshirt)}
 		}, true)
 		if len(rt.Rows) > 0 {
 			tables = append(tables, rt)
 		}
 	}
-	// Per-game averages divide by the stats row's own game count; the team
-	// record can lag it by a game mid-week.
+	return tables
+}
+
+// statGames is the game count behind a team's season totals. Per-game
+// averages divide by the stats row's own count; the team record can lag it by
+// a game mid-week.
+func statGames(t *store.Team) int {
 	games := int(t.Stats["WINS"] + t.Stats["LOSSES"] + t.Stats["TIES"])
 	if games == 0 {
 		games = t.W + t.L
 	}
-	return "teamstats", data{"T": t, "Season": season, "Tables": tables, "Summary": teamSeasonRows(t.Stats, games), "Tab": "stats"}, nil
+	return games
 }
 
 // renderSeasonTable builds one table, merging a person's rows for the same
@@ -1168,30 +1185,7 @@ func (s *Site) player(r *http.Request, c *store.Ctx) (string, data, error) {
 	if err != nil {
 		return "", nil, err
 	}
-	var tables []RenderedTable
-	for _, tb := range seasonTables {
-		rt := renderSeasonTable(tb, lines, func(l *store.SeasonLine) Row {
-			t := teamOr(teams, l.TeamID)
-			return Row{Label: fmt.Sprint(c.YearOf(l.Season)), Sub: t.Short, Href: fmt.Sprintf("/team/%d?season=%d", l.TeamID, c.YearOf(l.Season))}
-		}, false)
-		if len(rt.Rows) == 0 {
-			continue
-		}
-		sort.SliceStable(rt.Rows, func(i, j int) bool { return rt.Rows[i].Season < rt.Rows[j].Season })
-		// Career row.
-		car := store.Stats{}
-		for _, l := range lines {
-			if tb.groupOK(l.Group) {
-				car.Add(l.Stats)
-			}
-		}
-		tr := Row{Label: "Career"}
-		for _, col := range tb.Cols {
-			tr.Cells = append(tr.Cells, col.Val(car))
-		}
-		rt.Total = &tr
-		tables = append(tables, rt)
-	}
+	tables := careerTables(lines, teams, c)
 	// Game log for the latest season with games.
 	logSeason := c.Season
 	if y := atoi(r.URL.Query().Get("season"), 0); y > 0 {
@@ -1214,6 +1208,35 @@ func (s *Site) player(r *http.Request, c *store.Ctx) (string, data, error) {
 	raw := rawStatTable(lines, c)
 	return "player", data{"P": bio, "Team": teamOr(teams, bio.TeamID), "Tables": tables, "LogTables": logTables, "LogYear": c.YearOf(logSeason),
 		"Awards": awards, "Events": events, "Raw": raw, "Teams": teams}, nil
+}
+
+// careerTables is a player's season-by-season stats, one table per category
+// with a career row.
+func careerTables(lines []*store.SeasonLine, teams map[int]*store.Team, c *store.Ctx) []RenderedTable {
+	var tables []RenderedTable
+	for _, tb := range seasonTables {
+		rt := renderSeasonTable(tb, lines, func(l *store.SeasonLine) Row {
+			t := teamOr(teams, l.TeamID)
+			return Row{Label: fmt.Sprint(c.YearOf(l.Season)), Sub: t.Short, Href: fmt.Sprintf("/team/%d?season=%d", l.TeamID, c.YearOf(l.Season))}
+		}, false)
+		if len(rt.Rows) == 0 {
+			continue
+		}
+		sort.SliceStable(rt.Rows, func(i, j int) bool { return rt.Rows[i].Season < rt.Rows[j].Season })
+		car := store.Stats{}
+		for _, l := range lines {
+			if tb.groupOK(l.Group) {
+				car.Add(l.Stats)
+			}
+		}
+		tr := Row{Label: "Career"}
+		for _, col := range tb.Cols {
+			tr.Cells = append(tr.Cells, col.Val(car))
+		}
+		rt.Total = &tr
+		tables = append(tables, rt)
+	}
+	return tables
 }
 
 // gameLogTables renders a player's game log, one table per stat table with data.

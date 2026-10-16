@@ -268,8 +268,26 @@ func (s *Site) teamCompare(r *http.Request, c *store.Ctx) (string, data, error) 
 		sortCol = tb.SortBy
 	}
 
-	list := teamStatLines(teams, points, conf)
+	cols, rows, sortCol := rankTeams(tb, teamStatLines(teams, points, conf), perGame, sortCol)
 
+	mode := "pg"
+	if !perGame {
+		mode = "total"
+	}
+	title := "FBS"
+	if conf != "" {
+		title = conf
+	}
+	return "teamcompare", data{
+		"Table": tb, "Cols": cols, "Rows": rows, "Sort": sortCol, "Cat": tb.ID, "Tables": teamTables,
+		"Season": season, "Conf": conf, "Confs": conferences(teams), "Mode": mode, "PerGame": perGame,
+		"Scope": title,
+	}, nil
+}
+
+// rankTeams ranks teams on one comparison table's sortCol, returning the
+// columns actually shown and the index of the sort column among them.
+func rankTeams(tb *teamTable, list []teamLine, perGame bool, sortCol int) ([]teamCol, []TeamCompareRow, int) {
 	// Drop columns the save never fills (all zero), so a dead game field
 	// doesn't show up as a column of zeros.
 	cols := make([]teamCol, 0, len(tb.Cols))
@@ -320,22 +338,9 @@ func (s *Site) teamCompare(r *http.Request, c *store.Ctx) (string, data, error) 
 	// Ties share a rank (1, 2, 2, 4) and are compared on the shown value.
 	for i := range rows {
 		rows[i].Rank = i + 1
-		if i > 0 && rows[i].Cells[sortCol] == rows[i-1].Cells[sortCol] {
+		if i > 0 && len(cols) > 0 && rows[i].Cells[sortCol] == rows[i-1].Cells[sortCol] {
 			rows[i].Rank = rows[i-1].Rank
 		}
 	}
-
-	mode := "pg"
-	if !perGame {
-		mode = "total"
-	}
-	title := "FBS"
-	if conf != "" {
-		title = conf
-	}
-	return "teamcompare", data{
-		"Table": tb, "Cols": cols, "Rows": rows, "Sort": sortCol, "Cat": tb.ID, "Tables": teamTables,
-		"Season": season, "Conf": conf, "Confs": conferences(teams), "Mode": mode, "PerGame": perGame,
-		"Scope": title,
-	}, nil
+	return cols, rows, sortCol
 }

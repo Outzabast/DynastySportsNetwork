@@ -850,11 +850,12 @@ func (q *Queries) PlayerRefs(ctx context.Context, c *Ctx, season int, ids map[uu
 
 // SeasonLine is a person's season totals in one display group for one team.
 type SeasonLine struct {
-	Player PlayerRef
-	Season int
-	TeamID int
-	Group  string
-	Stats  Stats
+	Player   PlayerRef
+	Redshirt string // the player's redshirt status that season
+	Season   int
+	TeamID   int
+	Group    string
+	Stats    Stats
 }
 
 // SeasonLines returns season lines filtered by season (or -1 for all),
@@ -884,7 +885,7 @@ func (q *Queries) LeagueSeasonLines(ctx context.Context, c *Ctx, season int) ([]
 
 func (q *Queries) seasonLines(ctx context.Context, c *Ctx, season int, person uuid.UUID, team int, statsExpr string) ([]*SeasonLine, error) {
 	rows, err := q.s.DB.Query(ctx, `SELECT s.season_index, s.person_id, p.first_name, p.last_name, COALESCE(ps.position, ''), COALESCE(ps.jersey, 0), COALESCE(ps.portrait, ''),
-		COALESCE(ps.school_year, ''), s.team_id, s.category, `+statsExpr+`
+		COALESCE(ps.school_year, ''), COALESCE(ps.redshirt, ''), s.team_id, s.category, `+statsExpr+`
 		FROM player_season_stat s JOIN person p ON p.id = s.person_id
 		LEFT JOIN (SELECT DISTINCT ON (x.person_id) x.* FROM player_season x WHERE x.branch_id = $1 AND ($3::uuid IS NULL OR x.person_id = $3)
 			ORDER BY x.person_id, (x.season_index = $2) DESC, x.season_index DESC) ps ON ps.person_id = s.person_id
@@ -901,7 +902,7 @@ func (q *Queries) seasonLines(ctx context.Context, c *Ctx, season int, person uu
 		var cat string
 		var raw []byte
 		if err := rows.Scan(&l.Season, &l.Player.ID, &l.Player.First, &l.Player.Last, &l.Player.Position, &l.Player.Jersey, &l.Player.Portrait, &l.Player.ClassYear,
-			&l.TeamID, &cat, &raw); err != nil {
+			&l.Redshirt, &l.TeamID, &cat, &raw); err != nil {
 			return nil, err
 		}
 		var st Stats

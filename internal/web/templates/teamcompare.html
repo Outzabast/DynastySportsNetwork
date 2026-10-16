@@ -8,6 +8,15 @@
   <select name="conf" onchange="this.form.submit()"><option value="">All FBS</option>{{$conf := .Conf}}{{range .Confs}}<option {{if eq . $conf}}selected{{end}}>{{.}}</option>{{end}}</select>
   <span class="seg"><a class="{{if .PerGame}}on{{end}}" href="/stats/teams?cat={{.Cat}}&season={{year .C .Season}}&conf={{.Conf}}&sort={{.Sort}}">Per Game</a><a class="{{if not .PerGame}}on{{end}}" href="/stats/teams?cat={{.Cat}}&season={{year .C .Season}}&conf={{.Conf}}&sort={{.Sort}}&mode=total">Total</a></span>
 </form>
+<div class="xport-row">
+  <details class="xport"><summary>Export all categories</summary>
+    <div class="xport-menu">
+      <div class="h">{{year .C .Season}} {{.Scope}} · {{if .PerGame}}per game{{else}}totals{{end}}</div>
+      <a href="/stats/teams/export?season={{year .C .Season}}&conf={{.Conf}}&mode={{.Mode}}" download>Markdown <small>for AI chats</small></a>
+      <a href="/stats/teams/export?season={{year .C .Season}}&conf={{.Conf}}&mode={{.Mode}}&format=xlsx" download>Excel <small>one sheet per category</small></a>
+    </div>
+  </details>
+</div>
 <div class="filters">{{range .Tables}}<a class="pill {{if eq .ID $.Cat}}on{{end}}" href="/stats/teams?cat={{.ID}}&season={{year $.C $.Season}}&conf={{$.Conf}}&mode={{$.Mode}}">{{.Name}}</a>{{end}}</div>
 <div class="card">
   {{if .Rows}}

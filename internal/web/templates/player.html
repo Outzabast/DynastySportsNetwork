@@ -23,6 +23,15 @@
     {{if $p.Captain}}<div><dt>Role</dt><dd>Team Captain</dd></div>{{end}}
   </dl>
 </div>
+<div class="xport-row">
+  <details class="xport"><summary>Export</summary>
+    <div class="xport-menu">
+      <div class="h">Career stats &amp; game log</div>
+      <a href="/player/{{$p.ID}}/export" download>Markdown <small>for AI chats</small></a>
+      <a href="/player/{{$p.ID}}/export?format=xlsx" download>Excel</a>
+    </div>
+  </details>
+</div>
 
 <div class="grid g-2">
   <div>

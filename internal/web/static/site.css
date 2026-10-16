@@ -372,3 +372,16 @@ code { font-size: 12px; background: #f3f3f3; padding: 1px 4px; border-radius: 3p
   .pl-row img.hs { width: 32px; height: 32px; }
   .pl-row .who div { display: none; }
 }
+
+/* Export downloads */
+.xport-row { display: flex; justify-content: flex-end; margin: -8px 0 12px; }
+.xport { position: relative; display: inline-block; }
+.xport summary { list-style: none; cursor: pointer; display: inline-block; border: 1px solid var(--line); border-radius: 4px; padding: 6px 12px; font-size: 12px; font-weight: 700; color: var(--ink-2); background: #fff; }
+.xport summary::-webkit-details-marker { display: none; }
+.xport summary::after { content: " \25BE"; }
+.xport[open] summary { background: var(--ink); color: #fff; border-color: var(--ink); }
+.xport-menu { position: absolute; right: 0; top: calc(100% + 4px); z-index: 30; min-width: 250px; padding: 6px 0; background: #fff; border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 6px 18px rgba(0, 0, 0, .12); }
+.xport-menu .h { padding: 8px 14px 2px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; color: var(--muted); }
+.xport-menu a { display: block; padding: 6px 14px; font-size: 13px; color: var(--ink); }
+.xport-menu a:hover { background: var(--line-2); text-decoration: none; }
+.xport-menu a small { color: var(--muted); }

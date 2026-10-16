@@ -208,6 +208,7 @@ type Row struct {
 	Label  string
 	Href   string
 	Sub    string
+	Class  string // class year, where the table lists players
 	Cells  []string
 	sortV  float64
 	Team   int

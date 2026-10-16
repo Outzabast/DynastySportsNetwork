@@ -74,6 +74,18 @@
     <a href="/records?scope=team&name={{.T.Long}}">Records</a>
   </div>
 </div>
+<div class="xport-row">
+  <details class="xport"><summary>Export {{year .C .Season}}</summary>
+    <div class="xport-menu">
+      <div class="h">Team &amp; player stats</div>
+      <a href="/team/{{.T.ID}}/export/stats?season={{year .C .Season}}" download>Markdown <small>for AI chats</small></a>
+      <a href="/team/{{.T.ID}}/export/stats?season={{year .C .Season}}&format=xlsx" download>Excel</a>
+      <div class="h">Full season with box scores</div>
+      <a href="/team/{{.T.ID}}/export/season?season={{year .C .Season}}" download>Markdown <small>for AI chats</small></a>
+      <a href="/team/{{.T.ID}}/export/season?season={{year .C .Season}}&format=xlsx" download>Excel</a>
+    </div>
+  </details>
+</div>
 {{end}}
 
 {{define "seasonpick"}}

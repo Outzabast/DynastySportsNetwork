@@ -481,3 +481,8 @@ CREATE INDEX IF NOT EXISTS article_game ON article(dynasty_id, season_index, gam
 -- Game stories are either a preview (written before kickoff) or a recap.
 -- Older game-linked stories have kind '' and read as recaps.
 ALTER TABLE article ADD COLUMN IF NOT EXISTS kind text NOT NULL DEFAULT '';
+
+-- Superseded raw saves (an older save of the same week on the same branch)
+-- are deleted from data/archive to save space. The snapshot row stays; this
+-- marks that its archive file is gone, so rebuild and repair tools skip it.
+ALTER TABLE snapshot ADD COLUMN IF NOT EXISTS archive_pruned_at timestamptz;

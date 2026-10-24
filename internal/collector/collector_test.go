@@ -81,6 +81,53 @@ func TestCollectorIngestsNewAndChangedSaves(t *testing.T) {
 	}
 }
 
+// knownIngest also answers Known from the content it has already ingested,
+// as the database does across server restarts.
+type knownIngest struct {
+	fakeIngest
+	known map[string]bool
+}
+
+func (k *knownIngest) Known(ctx context.Context, sha string, mod time.Time) (bool, error) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return k.known[sha], nil
+}
+
+func TestCollectorSkipsKnownSavesAfterRestart(t *testing.T) {
+	saves, data := t.TempDir(), t.TempDir()
+	save := filepath.Join(saves, "DYNASTY-PURDUE")
+	os.WriteFile(save, []byte("untouched for weeks"), 0o644)
+	old := time.Now().Add(-48 * time.Hour)
+	os.Chtimes(save, old, old)
+
+	ki := &knownIngest{known: map[string]bool{}}
+	run := func() {
+		c := &Collector{SavesDir: saves, DataDir: data, Interval: 30 * time.Millisecond, Settle: 60 * time.Millisecond,
+			Ingest: ki, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+		ctx, cancel := context.WithCancel(context.Background())
+		go c.Run(ctx)
+		waitFor(t, func() bool { return c.Snapshot().Ingested+c.Snapshot().Skipped > 0 })
+		cancel()
+	}
+	run()
+	if ki.count() != 1 {
+		t.Fatalf("first run: ingested %d, want 1", ki.count())
+	}
+	ki.mu.Lock()
+	ki.known[ki.shas[0]] = true
+	ki.mu.Unlock()
+	os.RemoveAll(filepath.Join(data, "archive"))
+
+	run() // a server restart: the collector's memory is empty again
+	if n := ki.count(); n != 1 {
+		t.Fatalf("unchanged save re-ingested after restart: %d ingests", n)
+	}
+	if _, err := os.Stat(filepath.Join(data, "archive")); !os.IsNotExist(err) {
+		t.Fatal("a known save was archived again")
+	}
+}
+
 func TestIsDynastySave(t *testing.T) {
 	for name, want := range map[string]bool{
 		"DYNASTY-SEP19-10h09m37-AUTOSAVE":        true,

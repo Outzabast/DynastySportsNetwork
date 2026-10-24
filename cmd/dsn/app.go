@@ -24,6 +24,7 @@ type pipeline struct {
 	log    *slog.Logger
 	mu     sync.Mutex
 	notify func(*store.IngestResult)
+	prune  bool // delete superseded saves from the archive after each ingest (serve only)
 }
 
 func (p *pipeline) IngestFile(ctx context.Context, copyPath, archivePath, sha string, modTime time.Time) error {
@@ -47,10 +48,24 @@ func (p *pipeline) IngestFile(ctx context.Context, copyPath, archivePath, sha st
 	for _, n := range res.Notes {
 		p.log.Warn("reconcile", "note", n)
 	}
+	// A newer save of the same week supersedes the earlier ones: keep only
+	// the newest in the archive. Pruning never fails the ingest.
+	if p.prune && res.Action != "duplicate" && res.SnapshotID > 0 {
+		if files, freed, err := pruneArchives(ctx, p.store, p.cfg.DataDir, res.SnapshotID, false); err != nil {
+			p.log.Warn("prune archive", "err", err)
+		} else if files > 0 {
+			p.log.Info("pruned superseded saves", "files", files, "freed_mb", freed>>20)
+		}
+	}
 	if p.notify != nil && res.Action != "duplicate" {
 		p.notify(res)
 	}
 	return nil
+}
+
+// Known reports whether a save's content is already ingested (collector.Known).
+func (p *pipeline) Known(ctx context.Context, sha string, modTime time.Time) (bool, error) {
+	return p.store.KnownSave(ctx, sha, modTime)
 }
 
 func trimCopySuffix(p string) string {
@@ -136,7 +151,8 @@ func runReingest(args []string) error {
 		return err
 	}
 	defer src.Close()
-	rows, err := src.DB.Query(ctx, `SELECT DISTINCT ON (sha256) sha256, archive_path, save_name, mod_time FROM snapshot ORDER BY sha256, id`)
+	rows, err := src.DB.Query(ctx, `SELECT DISTINCT ON (sha256) sha256, archive_path, save_name, mod_time FROM snapshot
+		WHERE archive_pruned_at IS NULL ORDER BY sha256, id`)
 	if err != nil {
 		return err
 	}
@@ -216,6 +232,7 @@ func runServe(args []string) error {
 		return err
 	}
 	p.notify = site.Notify
+	p.prune = true
 	if !c.NoWatch {
 		p.log.Info("watching saves", "dir", c.SavesDir)
 		go col.Run(ctx)

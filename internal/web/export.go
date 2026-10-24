@@ -35,6 +35,7 @@ type xsheet struct {
 	Name    string // sheet tab (Excel limits it to 31 characters)
 	Heading string // full section title; Name when empty
 	Meta    []xkv
+	Body    string // free text (a story's Markdown), written after Meta
 	Tables  []*xtable
 }
 
@@ -392,6 +393,209 @@ func (s *Site) exportPlayer(r *http.Request, c *store.Ctx) (*xdoc, error) {
 	return d, nil
 }
 
+// exportGame is everything on the game page: the full box score for a played
+// game, the preview (predictor, odds, leaders, matchup, standings) for one not
+// yet played, and the text of every preview and recap story on the game.
+func (s *Site) exportGame(r *http.Request, c *store.Ctx) (*xdoc, error) {
+	d, err := s.gameData(r, c)
+	if err != nil {
+		return nil, err
+	}
+	g, away, home := d["G"].(*store.Game), d["Away"].(*store.Team), d["Home"].(*store.Team)
+	teams, year := d["Teams"].(map[int]*store.Team), d["Year"].(int)
+	line, _ := d["Line"].(*Line)
+
+	kind, kindFile := "Box Score", "box-score"
+	if !g.Played {
+		kind, kindFile = "Game Preview", "preview"
+	}
+	doc := &xdoc{
+		Title: fmt.Sprintf("%d %s vs. %s: %s", year, fullName(away), fullName(home), kind),
+		File:  fmt.Sprintf("%d-%s-vs-%s-%s", year, slug(away.Name), slug(home.Name), kindFile),
+		Meta:  gameMeta(c, g, away, home, line, teams, year),
+	}
+
+	if g.Played {
+		box := boxSheet(g, teams, d["Lines"].([]*store.Line), d["Plays"].([]*store.ScoringPlay), g.Home, year)
+		box.Name, box.Meta = "Box Score", nil // the game details are in the document meta
+		if len(d["Plays"].([]*store.ScoringPlay)) == 0 {
+			box.Meta = []xkv{{"Scoring plays", "Not available. The game keeps a scoring summary only during the week a game is played, and this game was played before its week was captured."}}
+		}
+		doc.Sheets = append(doc.Sheets, box)
+	} else {
+		pred, _ := d["Pred"].(*Prediction)
+		leaders, _ := d["Leaders"].([]PreviewLeader)
+		matchup, _ := d["Matchup"].([]PreviewStat)
+		stand, _ := d["Standings"].([]Standing)
+		doc.Sheets = append(doc.Sheets, previewSheet(g, away, home, pred, line, leaders, matchup, stand, year))
+	}
+
+	stories, _ := d["Stories"].([]StoryCard)
+	for _, st := range stories {
+		doc.Sheets = append(doc.Sheets, storySheet(st.Article))
+	}
+	return doc, nil
+}
+
+// gameMeta is the game header and info bar: teams, score, date, venue,
+// weather, coverage and the pregame line.
+func gameMeta(c *store.Ctx, g *store.Game, away, home *store.Team, line *Line, teams map[int]*store.Team, year int) []xkv {
+	side := func(t *store.Team) string {
+		name := fullName(t)
+		if t.ID < 0 {
+			return name // FCS placeholder: no record kept
+		}
+		if rk := t.Rank(); rk > 0 {
+			name = fmt.Sprintf("#%d %s", rk, name)
+		}
+		rec := t.Record()
+		if t.Conference != "" {
+			rec += ", " + t.ConfRecord() + " " + t.Conference
+		}
+		return fmt.Sprintf("%s (%s)", name, rec)
+	}
+	m := []xkv{{"Source", exportSource}, {"Dynasty", c.Name}, {"Season", fmt.Sprint(year)}, {"Week", weekLabel(g.WeekType, g.Week)}}
+	if l := g.TypeLabel(); l != "" {
+		m = append(m, xkv{"Game", l})
+	}
+	if g.BowlName != "" {
+		m = append(m, xkv{"Bowl", g.BowlName})
+	}
+	m = append(m, xkv{"Away", side(away)}, xkv{"Home", side(home)})
+	if g.Played {
+		final := "Final"
+		if g.Overtime {
+			final = "Final (OT)"
+		}
+		m = append(m, xkv{"Result", fmt.Sprintf("%s: %s %d, %s %d", final, away.Name, g.AwayScore, home.Name, g.HomeScore)})
+	}
+	date := dateLabel(g, year)
+	if !g.Played {
+		date += ", " + gameStatus(g)
+	}
+	m = append(m, xkv{"Date", date})
+	if g.Stadium != "" {
+		m = append(m, xkv{"Stadium", g.Stadium})
+	}
+	if g.Attendance > 0 {
+		m = append(m, xkv{"Attendance", fmt.Sprint(g.Attendance)})
+	}
+	weather := fmt.Sprintf("%d°F, %s", g.Temperature, prettyEnum(g.Weather))
+	if g.Wind != "" {
+		weather += fmt.Sprintf(", wind %s (%d mph)", prettyEnum(g.Wind), g.WindSpeed)
+	}
+	m = append(m, xkv{"Weather", weather})
+	if g.Network != "" {
+		m = append(m, xkv{"Coverage", g.Network})
+	}
+	if line != nil {
+		label := "Line"
+		if g.Played {
+			label = "Pregame line"
+		}
+		fav := "Pick'em"
+		if line.Favorite != -2 {
+			fav = teamOr(teams, line.Favorite).Short + " " + line.FavSpread
+		}
+		m = append(m, xkv{label, fmt.Sprintf("%s, O/U %s (DSN line, set from this season's scores)", fav, line.Total)})
+	}
+	return append(m, xkv{"Data through", dataThrough(c, g.Season)})
+}
+
+// fullName is "Texas State Bobcats" (FCS placeholders have no nickname).
+func fullName(t *store.Team) string {
+	return strings.TrimSpace(t.Long + " " + t.Nick)
+}
+
+// previewSheet is the pregame page for a game not yet played.
+func previewSheet(g *store.Game, away, home *store.Team, pred *Prediction, line *Line, leaders []PreviewLeader, matchup []PreviewStat, stand []Standing, year int) *xsheet {
+	sh := &xsheet{Name: "Matchup", Heading: fmt.Sprintf("Matchup: %s at %s", away.Name, home.Name)}
+	if pred != nil {
+		basis := "Based on last season's results"
+		if pred.Games > 0 {
+			basis = fmt.Sprintf("Based on %d games played this season", pred.Games)
+		}
+		if g.Week > 0 {
+			basis += fmt.Sprintf(", before week %d", g.Week)
+		}
+		sh.Meta = append(sh.Meta, xkv{"Matchup predictor", basis + "."})
+		sh.Tables = append(sh.Tables, &xtable{Title: "Matchup Predictor", Headers: []string{"Team", "Win %", "Projected Points"}, Rows: [][]string{
+			{away.Name, fmt.Sprintf("%.1f", pred.AwayPct), fmt.Sprintf("%.0f", pred.AwayPts)},
+			{home.Name, fmt.Sprintf("%.1f", pred.HomePct), fmt.Sprintf("%.0f", pred.HomePts)},
+		}})
+	}
+	if line != nil {
+		sh.Tables = append(sh.Tables, &xtable{Title: "Game Odds", Headers: []string{"Team", "Record", "Spread", "Total", "Moneyline"}, Rows: [][]string{
+			{away.Name, away.Record(), line.AwaySpread + " (-110)", "o" + line.Total + " (-110)", line.AwayML},
+			{home.Name, home.Record(), line.HomeSpread + " (-110)", "u" + line.Total + " (-110)", line.HomeML},
+		}})
+	}
+	if len(leaders) > 0 {
+		xt := &xtable{Title: "Season Leaders", Headers: []string{"Category", away.Short + " Leader", away.Short, home.Short + " Leader", home.Short}}
+		who := func(l *LeaderSide) (string, string) {
+			if l == nil {
+				return "-", "-"
+			}
+			name := fmt.Sprintf("%s (%s)", l.Player.Name(), l.Player.Position)
+			if l.Detail != "" {
+				name += ": " + l.Detail
+			}
+			return name, l.Value
+		}
+		for _, pl := range leaders {
+			an, av := who(pl.Away)
+			hn, hv := who(pl.Home)
+			xt.Rows = append(xt.Rows, []string{pl.Name, an, av, hn, hv})
+		}
+		sh.Tables = append(sh.Tables, xt)
+	}
+	if len(matchup) > 0 {
+		xt := &xtable{Title: "Team Stats (per game; ranks among all FBS teams)", Headers: []string{"Stat", away.Short, away.Short + " Rank", home.Short, home.Short + " Rank"}}
+		for _, ps := range matchup {
+			xt.Rows = append(xt.Rows, []string{ps.Label, ps.Away, fmt.Sprint(ps.AwayRank), ps.Home, fmt.Sprint(ps.HomeRank)})
+		}
+		sh.Tables = append(sh.Tables, xt)
+	}
+	for _, st := range stand {
+		for _, dv := range st.Divisions {
+			title := fmt.Sprintf("%d %s Standings", year, st.Conference)
+			if dv.Name != "" {
+				title += ": " + dv.Name
+			}
+			xt := &xtable{Title: title, Headers: []string{"Team", "Conf", "Overall"}}
+			for _, t := range dv.Teams {
+				xt.Rows = append(xt.Rows, []string{t.Name, t.ConfRecord(), t.Record()})
+			}
+			sh.Tables = append(sh.Tables, xt)
+		}
+	}
+	return sh
+}
+
+// storySheet is one preview or recap story, in full.
+func storySheet(a *store.Article) *xsheet {
+	label := a.Label()
+	if label == "" {
+		label = "Story"
+	}
+	sh := &xsheet{Name: label, Heading: label + ": " + a.Headline, Body: a.Body}
+	if a.Dek != "" {
+		sh.Meta = append(sh.Meta, xkv{"Summary", a.Dek})
+	}
+	if a.Byline != "" {
+		sh.Meta = append(sh.Meta, xkv{"By", a.Byline})
+	}
+	if a.Published {
+		sh.Meta = append(sh.Meta, xkv{"Published", a.When().Format("Jan 2, 2006")})
+	} else {
+		sh.Meta = append(sh.Meta, xkv{"Status", "Draft (not published)"})
+	}
+	if a.ImageCaption != "" {
+		sh.Meta = append(sh.Meta, xkv{"Photo caption", a.ImageCaption})
+	}
+	return sh
+}
+
 // ---- Shared pieces ----
 
 func dataThrough(c *store.Ctx, season int) string {
@@ -665,7 +869,10 @@ func writeMarkdown(w *bytes.Buffer, d *xdoc) {
 	for _, sh := range d.Sheets {
 		fmt.Fprintf(w, "## %s\n\n", sh.heading())
 		mdMeta(w, sh.Meta)
-		if len(sh.Tables) == 0 && len(sh.Meta) == 0 {
+		if sh.Body != "" {
+			w.WriteString(demoteHeadings(strings.TrimSpace(sh.Body)) + "\n\n")
+		}
+		if len(sh.Tables) == 0 && len(sh.Meta) == 0 && sh.Body == "" {
 			w.WriteString("_No entries._\n\n")
 		}
 		for _, t := range sh.Tables {
@@ -704,6 +911,50 @@ func mdMeta(w *bytes.Buffer, m []xkv) {
 	}
 }
 
+var mdHeading = regexp.MustCompile(`(?m)^(#{1,6})(\s)`)
+
+// demoteHeadings moves a story's own headings two levels down, so they nest
+// under its "##" section instead of competing with the document's.
+func demoteHeadings(s string) string {
+	return mdHeading.ReplaceAllStringFunc(s, func(h string) string {
+		n := min(strings.Count(h, "#")+2, 6)
+		return strings.Repeat("#", n) + h[len(h)-1:]
+	})
+}
+
+var (
+	mdMarks    = regexp.MustCompile(`^#{1,6}\s+|\*\*|__|` + "`")
+	mdListItem = regexp.MustCompile(`^([-*+]|\d+[.)])\s`)
+	mdParaGap  = regexp.MustCompile(`\n\s*\n`)
+)
+
+// plainParagraphs splits story Markdown into paragraphs for spreadsheet
+// cells, dropping heading and emphasis markers. Wrapped lines of a paragraph
+// join; each list item stays its own paragraph.
+func plainParagraphs(s string) []string {
+	var out []string
+	for _, para := range mdParaGap.Split(strings.TrimSpace(s), -1) {
+		var cur []string
+		flush := func() {
+			if len(cur) > 0 {
+				out = append(out, strings.Join(cur, " "))
+				cur = nil
+			}
+		}
+		for _, l := range strings.Split(para, "\n") {
+			l = strings.TrimSpace(l)
+			if mdListItem.MatchString(l) {
+				flush()
+			}
+			if l = strings.TrimSpace(mdMarks.ReplaceAllString(l, "")); l != "" {
+				cur = append(cur, l)
+			}
+		}
+		flush()
+	}
+	return out
+}
+
 var mdEscape = strings.NewReplacer("|", `\|`, "\n", " ")
 
 func mdRow(w *bytes.Buffer, cells []string) {
@@ -728,6 +979,7 @@ func writeXLSX(w io.Writer, d *xdoc) error {
 			Border: []excelize.Border{{Type: "top", Color: "000000", Style: 1}}}
 	}
 	total, _ := f.NewStyle(totalStyle("General"))
+	wrap, _ := f.NewStyle(&excelize.Style{Alignment: &excelize.Alignment{WrapText: true, Vertical: "top"}})
 	// Decimal styles by digit count, plain and for total rows.
 	decimals := map[[2]int]int{}
 	decimal := func(digits int, isTotal bool) int {
@@ -808,6 +1060,18 @@ func writeXLSX(w io.Writer, d *xdoc) error {
 			f.SetCellStyle(name, cell, cell, bold)
 		}
 		row++
+		// Story text: one wrapped paragraph per row in a wide first column.
+		if sh.Body != "" {
+			for _, p := range plainParagraphs(sh.Body) {
+				cell, _ := excelize.CoordinatesToCellName(1, row)
+				if err := f.SetCellStr(name, cell, p); err != nil {
+					return err
+				}
+				f.SetCellStyle(name, cell, cell, wrap)
+				row++
+			}
+			row++
+		}
 		for _, t := range sh.Tables {
 			if t.Title != "" {
 				if err := put([]string{t.Title}, bold, false); err != nil {
@@ -836,6 +1100,9 @@ func writeXLSX(w io.Writer, d *xdoc) error {
 				width = max(width, 16)
 			}
 			f.SetColWidth(name, col, col, width)
+		}
+		if sh.Body != "" && len(widths) == 0 {
+			f.SetColWidth(name, "A", "A", 100)
 		}
 	}
 	f.SetActiveSheet(0)

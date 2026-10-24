@@ -487,7 +487,8 @@ func (x *extractor) playerStats(snap *Snapshot) {
 	}
 	owned := map[key]bool{}
 	// recordAt attributes a stat row to a player. forceGame >= 0 pins game
-	// lines to that SeasonGame row (unpublished cache rows).
+	// lines to that SeasonGame row and to forceTeam, the cache side they came
+	// from (unpublished cache rows). forceTeam may be -1: the FCS side.
 	var recordAt func(pr dynasty.Record, ref dynasty.RecordReference, forceGame, forceTeam int)
 	record := func(pr dynasty.Record, ref dynasty.RecordReference) { recordAt(pr, ref, -1, -1) }
 	recordAt = func(pr dynasty.Record, ref dynasty.RecordReference, forceGame, forceTeam int) {
@@ -519,13 +520,17 @@ func (x *extractor) playerStats(snap *Snapshot) {
 			if !ok {
 				return
 			}
-			opp := x.teamIDFromRef(refF(row, "OpposingTeam"))
-			team := teams[0]
-			if opp == teams[0] {
-				team = teams[1]
-			}
-			if forceTeam >= 0 {
-				team = forceTeam
+			// Published rows name the opponent; unpublished cache rows don't,
+			// so their side comes from the cache they sit in. Don't test
+			// forceTeam >= 0: the FCS side is -1, and the opponent fallback
+			// would then put FCS players on the FBS team.
+			team := forceTeam
+			if forceGame < 0 {
+				opp := x.teamIDFromRef(refF(row, "OpposingTeam"))
+				team = teams[0]
+				if opp == teams[0] {
+					team = teams[1]
+				}
 			}
 			snap.PlayerGameStats = append(snap.PlayerGameStats, PlayerGameStat{
 				GameRow: gameRow, PlayerRow: pr.Index, TeamID: team, Category: st.category, SourceRow: row.Index, Stats: stats,

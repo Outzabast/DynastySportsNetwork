@@ -162,6 +162,7 @@ func (s *Site) routes() http.Handler {
 	mux.HandleFunc("GET /team/{id}/export/season", s.export(s.exportSeason))
 	mux.HandleFunc("GET /stats/teams/export", s.export(s.exportTeamCompare))
 	mux.HandleFunc("GET /player/{id}/export", s.export(s.exportPlayer))
+	mux.HandleFunc("GET /game/{season}/{row}/export", s.export(s.exportGame))
 
 	mux.HandleFunc("GET /api/scoreboard", s.api(s.apiScoreboard))
 	mux.HandleFunc("GET /api/game/{season}/{row}", s.api(s.apiGame))

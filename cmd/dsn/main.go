@@ -14,7 +14,9 @@ commands:
   ingest    ingest one save file (copies it first) and exit
   reingest  re-ingest every archived save in timeline order
   extract   print a summary of what a save contains (debug)
-  backfill-team-stats  refill empty team season totals from the archive`)
+  backfill-team-stats  refill empty team season totals from the archive
+  repair-fcs-lines     move FCS players' game lines off the FBS team (from the archive)
+  prune-archive        delete superseded saves (older saves of the same week) from the archive`)
 }
 
 func main() {
@@ -34,6 +36,10 @@ func main() {
 		err = runReingest(args)
 	case "backfill-team-stats":
 		err = runBackfillTeamStats(args)
+	case "repair-fcs-lines":
+		err = runRepairFCSLines(args)
+	case "prune-archive":
+		err = runPruneArchive(args)
 	case "extract":
 		err = runExtract(args)
 	default:

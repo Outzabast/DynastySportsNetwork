@@ -7,10 +7,12 @@ package collector
 import (
 	"compress/gzip"
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -23,6 +25,14 @@ import (
 // Ingester receives each new save copy.
 type Ingester interface {
 	IngestFile(ctx context.Context, copyPath, archivePath, sha string, modTime time.Time) error
+}
+
+// Known is optionally implemented by an Ingester. The collector forgets what
+// it has seen when the server restarts, so every save in the folder looks new
+// again; Known lets it skip a save whose content is already ingested after
+// only a copy and hash, without parsing it or logging it as changed.
+type Known interface {
+	Known(ctx context.Context, sha string, modTime time.Time) (bool, error)
 }
 
 // Collector polls the saves directory. Polling (every Interval) is cheap,
@@ -185,6 +195,19 @@ func (c *Collector) collect(ctx context.Context, path string, info os.FileInfo) 
 	if err != nil {
 		return err
 	}
+	if k, ok := c.Ingest.(Known); ok {
+		known, err := k.Known(ctx, sha, info.ModTime())
+		if err != nil {
+			return err
+		}
+		if known {
+			c.Log.Debug("save unchanged", "file", filepath.Base(path), "sha", sha[:12])
+			c.mu.Lock()
+			c.Status.Skipped++
+			c.mu.Unlock()
+			return nil
+		}
+	}
 	archive, err := Archive(c.DataDir, tmp, sha)
 	if err != nil {
 		return err
@@ -254,6 +277,25 @@ func Archive(dataDir, src, sha string) (string, error) {
 		return "", err
 	}
 	return dst, os.Rename(tmp, dst)
+}
+
+var shaHex = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+// RemoveArchive deletes data/archive/<sha>.gz and returns the bytes freed.
+// A file that is already gone is not an error.
+func RemoveArchive(dataDir, sha string) (int64, error) {
+	if !shaHex.MatchString(sha) {
+		return 0, fmt.Errorf("not a sha256: %q", sha)
+	}
+	p := filepath.Join(dataDir, "archive", sha+".gz")
+	info, err := os.Stat(p)
+	if os.IsNotExist(err) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	return info.Size(), os.Remove(p)
 }
 
 // Unarchive expands an archived save to dst.

@@ -46,6 +46,23 @@ func (s *Store) Ingest(ctx context.Context, snap *extract.Snapshot, archivePath 
 	return res, nil
 }
 
+// KnownSave reports whether ingesting a save with this content and modified
+// time would be a no-op ("duplicate"), so the collector can skip parsing it.
+// It mirrors the duplicate rule in run: the newest snapshot with this content
+// is on the active branch, or the file is not newer than the dynasty's latest
+// save. A newer copy of a save from an abandoned branch is not known: ingest
+// must see it to reactivate that branch.
+func (s *Store) KnownSave(ctx context.Context, sha string, modTime time.Time) (bool, error) {
+	var known bool
+	err := s.DB.QueryRow(ctx, `SELECT b.status = 'active' OR NOT (d.last_save_at IS NULL OR $2 > d.last_save_at)
+		FROM snapshot s JOIN branch b ON b.id = s.branch_id JOIN dynasty d ON d.id = s.dynasty_id
+		WHERE s.sha256 = $1 ORDER BY s.id DESC LIMIT 1`, sha, modTime).Scan(&known)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	return known, err
+}
+
 type ingest struct {
 	tx      pgx.Tx
 	snap    *extract.Snapshot

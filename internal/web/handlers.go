@@ -519,6 +519,14 @@ type ScoreLine struct {
 }
 
 func (s *Site) game(r *http.Request, c *store.Ctx) (string, data, error) {
+	d, err := s.gameData(r, c)
+	return "game", d, err
+}
+
+// gameData is everything the game page shows. The box score export reads the
+// same map, so the two never disagree. Teams, Lines and Plays are the raw
+// inputs, kept for the export's box sheet.
+func (s *Site) gameData(r *http.Request, c *store.Ctx) (data, error) {
 	ctx := r.Context()
 	season, row := atoi(r.PathValue("season"), -1)-c.BaseYear, atoi(r.PathValue("row"), -1)
 	var (
@@ -542,15 +550,16 @@ func (s *Site) game(r *http.Request, c *store.Ctx) (string, data, error) {
 		func() (err error) { cur, last, err = s.seasonResults(ctx, c, season); return },
 	)
 	if err != nil {
-		return "", nil, err
+		return nil, err
 	}
 	if g == nil {
-		return "", nil, errNotFound
+		return nil, errNotFound
 	}
 	away, home := teamOr(teams, g.Away), teamOr(teams, g.Home)
 	d := data{"G": g, "Away": away, "Home": home, "Box": boxCategories(g, lines), "Stories": s.storyCards(teams, recaps),
 		"TeamStats": teamBoxRows(g.AwayBox, g.HomeBox), "Scoring": scoringLines(g, plays, lines), "HasScoring": len(plays) > 0,
-		"Season": season, "Year": c.YearOf(season), "Quarters": quarterCols(g)}
+		"Season": season, "Year": c.YearOf(season), "Quarters": quarterCols(g),
+		"Teams": teams, "Lines": lines, "Plays": plays}
 	for _, a := range recaps {
 		if a.IsPreview() {
 			d["HasPreview"] = true
@@ -563,7 +572,7 @@ func (s *Site) game(r *http.Request, c *store.Ctx) (string, data, error) {
 	if !g.Played {
 		pv, err := s.preview(ctx, c, g, teams, away, home)
 		if err != nil {
-			return "", nil, err
+			return nil, err
 		}
 		for k, v := range pv {
 			d[k] = v
@@ -572,7 +581,7 @@ func (s *Site) game(r *http.Request, c *store.Ctx) (string, data, error) {
 	if l, ok := d["Line"].(*Line); ok {
 		d["LineFav"] = teamOr(teams, l.Favorite)
 	}
-	return "game", d, nil
+	return d, nil
 }
 
 // boxTable is one team's table for a box score category.

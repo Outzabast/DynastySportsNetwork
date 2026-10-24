@@ -34,7 +34,7 @@ func runBackfillTeamStats(args []string) error {
 
 	rows, err := st.DB.Query(ctx, `SELECT DISTINCT s.id, s.archive_path, s.save_name FROM team_season ts
 		JOIN snapshot s ON s.id = ts.snapshot_id
-		WHERE ts.stats IS NULL OR ts.stats = '{}'::jsonb ORDER BY s.id`)
+		WHERE (ts.stats IS NULL OR ts.stats = '{}'::jsonb) AND s.archive_pruned_at IS NULL ORDER BY s.id`)
 	if err != nil {
 		return err
 	}

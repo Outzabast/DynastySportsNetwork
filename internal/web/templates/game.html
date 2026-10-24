@@ -37,6 +37,15 @@
     {{if and $g.Played .Line}}<span>Line: {{if eq .Line.Favorite -2}}Pick'em{{else}}{{.LineFav.Short}} {{.Line.FavSpread}}{{end}} · O/U {{.Line.Total}}</span>{{end}}
   </div>
 </div>
+<div class="xport-row">
+  <details class="xport"><summary>Export</summary>
+    <div class="xport-menu">
+      <div class="h">{{if $g.Played}}Box score{{else}}Game preview{{end}}{{if .Stories}} with stories{{end}}</div>
+      <a href="/game/{{.Year}}/{{$g.Row}}/export" download>Markdown <small>for AI chats</small></a>
+      <a href="/game/{{.Year}}/{{$g.Row}}/export?format=xlsx" download>Excel</a>
+    </div>
+  </details>
+</div>
 
 {{if $g.Played}}
 {{template "gamestories" .}}

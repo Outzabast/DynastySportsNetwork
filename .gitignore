@@ -2,3 +2,4 @@
 *.copy
 /tmp/
 .env
+/data/archive

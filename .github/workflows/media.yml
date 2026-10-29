@@ -1,0 +1,62 @@
+# Keep the private R2 bucket (dsn-media) in step with media/ in git.
+#   push to main touching media/  -> upload changed files, delete removed ones
+#   Run workflow (manual)         -> upload everything (first fill or repair)
+# Both rewrite _manifest.txt, which the hosted site reads to index media.
+# Nothing is deleted in a full run, so article images uploaded on the hosted
+# site (articles/, not in git) are kept.
+name: Media
+
+on:
+  push:
+    branches: [main]
+    paths: ["media/**"]
+  workflow_dispatch:
+
+concurrency:
+  group: media
+  cancel-in-progress: false
+
+env:
+  BUCKET: dsn-media
+  RCLONE_CONFIG_R2_TYPE: s3
+  RCLONE_CONFIG_R2_PROVIDER: Cloudflare
+  RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+  RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+  RCLONE_CONFIG_R2_ENDPOINT: https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com
+  RCLONE_CONFIG_R2_NO_CHECK_BUCKET: "true"
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          filter: blob:none
+
+      - name: Install rclone
+        run: curl -fsSL https://rclone.org/install.sh | sudo bash
+
+      - name: Upload
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] || ! git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            echo "Full upload"
+            rclone copy media "r2:$BUCKET" --checksum --transfers 32 --stats-one-line --stats 30s
+          else
+            changes() { git -c core.quotepath=off diff --name-only --no-renames --diff-filter="$1" "$BEFORE" "$GITHUB_SHA" -- media | sed 's#^media/##'; }
+            changes d > changed.txt
+            changes D > deleted.txt
+            echo "Changed: $(wc -l < changed.txt), deleted: $(wc -l < deleted.txt)"
+            if [ -s changed.txt ]; then
+              rclone copy media "r2:$BUCKET" --files-from-raw changed.txt --no-traverse --transfers 32
+            fi
+            if [ -s deleted.txt ]; then
+              rclone delete "r2:$BUCKET" --files-from-raw deleted.txt
+            fi
+          fi
+          git -c core.quotepath=off ls-files media | sed 's#^media/##' > _manifest.txt
+          rclone copyto _manifest.txt "r2:$BUCKET/_manifest.txt"
+          echo "Manifest: $(wc -l < _manifest.txt) files"

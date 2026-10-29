@@ -1,0 +1,47 @@
+# Test, then deploy the hosted site (Worker + `dsn serve -hosted` container)
+# to dynasty.williamfowle.com. Media is synced separately by media.yml.
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ["media/**", "docs/**", "**.md"]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # media/ is ~2 GB and not part of the image.
+          sparse-checkout: |
+            /*
+            !/media/
+          sparse-checkout-cone-mode: false
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Test
+        run: |
+          go vet ./...
+          go test ./...
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Deploy
+        run: npx wrangler deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

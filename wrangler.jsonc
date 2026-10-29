@@ -1,0 +1,35 @@
+// Hosted site: a Worker in front of the Go container (`dsn serve -hosted`).
+// Deployed by .github/workflows/deploy.yml. Secrets (not in this file):
+//   DSN_DB  hosted Postgres URL   ->  npx wrangler secret put DSN_DB
+{
+	"$schema": "./node_modules/wrangler/config-schema.json",
+	"name": "dynasty-sports-network",
+	"main": "worker/index.ts",
+	"compatibility_date": "2026-10-13",
+	// Only the custom domain, which Cloudflare Access protects. No workers.dev
+	// or preview URLs that would skip Access.
+	"workers_dev": false,
+	"preview_urls": false,
+	"routes": [{ "pattern": "dynasty.williamfowle.com", "custom_domain": true }],
+	"observability": { "enabled": true },
+	"vars": {
+		// Access app "Dynasty Sports Network" (id 44d97c94-c2f0-4e76-894d-62ef0fac0a04)
+		"ACCESS_TEAM_DOMAIN": "sweet-darkness-3d5b.cloudflareaccess.com",
+		"ACCESS_AUD": "7af5a274d085b4003f7fed3e70a7df40347e89d0eb7a1b7038f9b8f941bfb100"
+	},
+	"r2_buckets": [{ "binding": "MEDIA", "bucket_name": "dsn-media" }],
+	"containers": [
+		{
+			"class_name": "Site",
+			"image": "./Dockerfile",
+			"max_instances": 1,
+			"instance_type": "basic"
+		}
+	],
+	"durable_objects": {
+		"bindings": [{ "name": "SITE", "class_name": "Site" }]
+	},
+	"exports": {
+		"Site": { "type": "durable-object", "storage": "sqlite" }
+	}
+}

@@ -3,3 +3,5 @@
 /tmp/
 .env
 /data/archive
+node_modules/
+.wrangler/

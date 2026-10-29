@@ -662,6 +662,11 @@ func (x *extractor) entities(snap *Snapshot) {
 						c.SeasonWins, c.SeasonLosses = intF(st, "Wins"), intF(st, "Losses")
 					}
 				}
+				if ref := refF(r, "CareerStats"); ref != nil {
+					if st, ok := x.f.RecordByReference("CareerCoachStats", ref); ok {
+						c.DraftPicks = intF(st, "DraftPicks")
+					}
+				}
 			}
 		}
 	}
@@ -691,9 +696,16 @@ func (x *extractor) entities(snap *Snapshot) {
 		x.wanted[p.ID] = true
 	}
 
+	weekly := x.weeklyAwardSeasons(snap.Season.SeasonIndex)
 	for _, a := range e.PlayerAwards {
-		snap.PlayerAwards = append(snap.PlayerAwards, PlayerAward{PlayerRow: a.PlayerID, FirstName: a.FirstName, LastName: a.LastName,
-			TeamID: derefOr(a.TeamID, -1), Position: a.Position, AwardType: a.AwardType, Period: a.Period, PeriodIndex: derefOr(a.PeriodIndex, -1)})
+		pa := PlayerAward{PlayerRow: a.PlayerID, FirstName: a.FirstName, LastName: a.LastName,
+			TeamID: derefOr(a.TeamID, -1), Position: a.Position, AwardType: a.AwardType, Period: a.Period, PeriodIndex: derefOr(a.PeriodIndex, -1), SeasonIndex: -1}
+		if a.Period == "Season" {
+			pa.SeasonIndex = pa.PeriodIndex
+		} else if s, ok := weekly[a.ID]; ok {
+			pa.SeasonIndex = s
+		}
+		snap.PlayerAwards = append(snap.PlayerAwards, pa)
 		x.wanted[a.PlayerID] = true
 	}
 	for _, a := range e.LeagueAwards {
@@ -721,7 +733,7 @@ func (x *extractor) entities(snap *Snapshot) {
 		x.wanted[i.PlayerID] = true
 	}
 	for _, l := range e.LeavingPlayers {
-		snap.LeavingPlayers = append(snap.LeavingPlayers, LeavingPlayer{PlayerRow: l.PlayerID, TeamID: derefOr(l.TeamID, -1),
+		snap.LeavingPlayers = append(snap.LeavingPlayers, LeavingPlayer{Row: l.ID, PlayerRow: l.PlayerID, TeamID: derefOr(l.TeamID, -1),
 			LeaveType: l.LeaveType, Round: deref(l.ProjectRound)})
 		x.wanted[l.PlayerID] = true
 	}

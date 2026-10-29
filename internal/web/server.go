@@ -25,9 +25,15 @@ var assets embed.FS
 type Options struct {
 	Store    *store.Store
 	MediaDir string
-	SavesDir string
-	Log      *slog.Logger
-	Status   func() collector.Status
+	// MediaURL, when set, replaces MediaDir: the media index comes from the
+	// bucket's manifest and uploads are stored there (see remotemedia.go).
+	MediaURL string
+	// BehindAccess means Cloudflare Access authenticates every request before
+	// it arrives, so editing and the MCP endpoint aren't limited to loopback.
+	BehindAccess bool
+	SavesDir     string
+	Log          *slog.Logger
+	Status       func() collector.Status
 }
 
 // Site is the HTTP application.
@@ -36,6 +42,7 @@ type Site struct {
 	q     *store.Queries
 	tmpl  map[string]*template.Template
 	media *mediaIndex
+	pages http.Handler // the routes, for MCP tools to render pages through
 
 	mu      sync.Mutex
 	clients map[chan string]struct{}
@@ -44,7 +51,17 @@ type Site struct {
 // New builds the site.
 func New(opt Options) (*Site, error) {
 	s := &Site{opt: opt, q: store.NewQueries(opt.Store), clients: map[chan string]struct{}{}}
-	s.media = newMediaIndex(opt.MediaDir)
+	if opt.MediaURL != "" {
+		// Without a manifest (bucket not filled yet) pages still render, just
+		// without logos and portraits.
+		paths, err := fetchMediaManifest(context.Background(), opt.MediaURL)
+		if err != nil {
+			opt.Log.Warn("media index empty", "err", err)
+		}
+		s.media = newManifestIndex(paths)
+	} else {
+		s.media = newMediaIndex(opt.MediaDir)
+	}
 	if err := s.loadTemplates(); err != nil {
 		return nil, err
 	}
@@ -169,6 +186,9 @@ func (s *Site) routes() http.Handler {
 	mux.HandleFunc("GET /api/team/{id}", s.api(s.apiTeam))
 	mux.HandleFunc("GET /api/player/{id}", s.api(s.apiPlayer))
 	mux.HandleFunc("GET /api/standings", s.api(s.apiStandings))
+
+	mux.HandleFunc(mcpPath, s.mcp)
+	s.pages = mux
 	return logRequests(s.opt.Log, mux)
 }
 

@@ -26,9 +26,10 @@ import (
 
 // Articles are written on the machine that runs the site. Editing is open to
 // loopback clients only (DSN_EDIT_ANYWHERE=1 lifts that), and every write
-// must come from this site's own pages.
-func canEdit(r *http.Request) bool {
-	if os.Getenv("DSN_EDIT_ANYWHERE") == "1" {
+// must come from this site's own pages. Behind Cloudflare Access every request
+// is already authenticated, so the hosted site lets anyone who got in edit.
+func (s *Site) canEdit(r *http.Request) bool {
+	if s.opt.BehindAccess || os.Getenv("DSN_EDIT_ANYWHERE") == "1" {
 		return true
 	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
@@ -108,7 +109,7 @@ func (s *Site) storyCards(teams map[int]*store.Team, list []*store.Article) []St
 
 func (s *Site) news(r *http.Request, c *store.Ctx) (string, data, error) {
 	ctx := r.Context()
-	f := store.ArticleFilter{Drafts: canEdit(r), Team: atoi(r.URL.Query().Get("team"), -1), Season: -1, Limit: 100}
+	f := store.ArticleFilter{Drafts: s.canEdit(r), Team: atoi(r.URL.Query().Get("team"), -1), Season: -1, Limit: 100}
 	list, err := s.q.Articles(ctx, c, f)
 	if err != nil {
 		return "", nil, err
@@ -130,7 +131,7 @@ func (s *Site) story(r *http.Request, c *store.Ctx) (string, data, error) {
 	if err != nil {
 		return "", nil, err
 	}
-	if a == nil || (!a.Published && !canEdit(r)) {
+	if a == nil || (!a.Published && !s.canEdit(r)) {
 		return "", nil, errNotFound
 	}
 	teams, err := s.q.Teams(ctx, c, c.Season)
@@ -164,7 +165,7 @@ func (s *Site) story(r *http.Request, c *store.Ctx) (string, data, error) {
 // editor serves the write/edit form. ?game=2034/865 prefills a game story:
 // a preview when the game is unplayed (or ?kind=preview), else a recap.
 func (s *Site) editor(r *http.Request, c *store.Ctx) (string, data, error) {
-	if !canEdit(r) {
+	if !s.canEdit(r) {
 		return "", nil, errNotFound
 	}
 	ctx := r.Context()
@@ -236,7 +237,7 @@ func parseGameRef(c *store.Ctx, v string) (season, row int, ok bool) {
 // action wraps a form post: editor-only, same-origin, then redirect.
 func (s *Site) action(f func(w http.ResponseWriter, r *http.Request, c *store.Ctx) (string, error)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !canEdit(r) || !sameOrigin(r) {
+		if !s.canEdit(r) || !sameOrigin(r) {
 			http.Error(w, "editing is only available on the machine running the site", http.StatusForbidden)
 			return
 		}
@@ -350,6 +351,14 @@ func (s *Site) upload(w http.ResponseWriter, r *http.Request, c *store.Ctx) (str
 	rand.Read(suffix)
 	base := store.Slugify(strings.TrimSuffix(hdr.Filename, filepath.Ext(hdr.Filename)))
 	name := fmt.Sprintf("%s-%s-%s%s", time.Now().Format("2006-01-02"), base, hex.EncodeToString(suffix), ext)
+	if s.opt.MediaURL != "" {
+		if err := putMedia(r.Context(), s.opt.MediaURL, "articles/"+name, http.DetectContentType(head[:n]), file); err != nil {
+			return "", err
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"url": "/media/articles/" + name})
+		return "", nil
+	}
 	dir := filepath.Join(s.opt.MediaDir, "articles")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err

@@ -18,7 +18,8 @@ commands:
   repair-fcs-lines     move FCS players' game lines off the FBS team (from the archive)
   prune-archive        delete superseded saves (older saves of the same week) from the archive
   backfill-rosters     record past seasons' full rosters from the archive
-  repair-season-conferences  fix seasons recorded with next season's conferences`)
+  repair-season-conferences  fix seasons recorded with next season's conferences
+  backfill-draft-awards  record past NFL draft picks and weekly award seasons from the archive`)
 }
 
 func main() {
@@ -46,6 +47,8 @@ func main() {
 		err = runBackfillRosters(args)
 	case "repair-season-conferences":
 		err = runRepairSeasonConferences(args)
+	case "backfill-draft-awards":
+		err = runBackfillDraftAwards(args)
 	case "extract":
 		err = runExtract(args)
 	default:

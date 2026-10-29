@@ -93,7 +93,7 @@ func (s *Site) page(f pageFunc) http.HandlerFunc {
 		d["C"] = c
 		d["Ticker"] = ticker
 		d["Path"] = r.URL.Path
-		d["CanEdit"] = canEdit(r)
+		d["CanEdit"] = s.canEdit(r)
 		s.render(w, http.StatusOK, name, d)
 	}
 }
@@ -544,7 +544,7 @@ func (s *Site) gameData(r *http.Request, c *store.Ctx) (data, error) {
 		func() (err error) { lines, err = s.q.GameLines(ctx, c, season, row); return },
 		func() (err error) { plays, err = s.q.ScoringPlays(ctx, c, season, row); return },
 		func() (err error) {
-			recaps, err = s.q.Articles(ctx, c, store.ArticleFilter{Team: -1, Season: season, Game: row, Drafts: canEdit(r), Limit: 5})
+			recaps, err = s.q.Articles(ctx, c, store.ArticleFilter{Team: -1, Season: season, Game: row, Drafts: s.canEdit(r), Limit: 5})
 			return
 		},
 		func() (err error) { cur, last, err = s.seasonResults(ctx, c, season); return },
@@ -1260,10 +1260,18 @@ func (s *Site) player(r *http.Request, c *store.Ctx) (string, data, error) {
 	if err != nil {
 		return "", nil, err
 	}
+	picks, err := s.q.DraftPicks(ctx, c, store.DraftFilter{Team: -1, Person: id})
+	if err != nil {
+		return "", nil, err
+	}
+	var draft *store.DraftPick
+	if len(picks) > 0 {
+		draft = picks[0]
+	}
 	raw := rawStatTable(lines, c)
 	return "player", data{"P": bio, "Team": teamOr(teams, bio.TeamID), "Tables": tables, "LogTables": logTables, "LogYear": c.YearOf(logSeason),
 		"LogTeam": logTeam, "LogTabs": logTabs, "NoLog": strings.Join(noLog, ", "), "Stints": stints,
-		"Awards": awards, "Transactions": playerTransactions(events, stints, teams, c), "Raw": raw, "Teams": teams}, nil
+		"Awards": awards, "Transactions": playerTransactions(events, picks, stints, teams, c), "Draft": draft, "Raw": raw, "Teams": teams}, nil
 }
 
 // LogTab is one season choice above a player's game log.
@@ -1333,22 +1341,44 @@ type Transaction struct {
 	Text string
 }
 
-// playerTransactions is the player's moves, newest first: transfers (from his
-// career stints) and the game's events (position changes, players listed as
-// leaving at season's end).
-func playerTransactions(events []*store.Event, stints []CareerStint, teams map[int]*store.Team, c *store.Ctx) []Transaction {
+// playerTransactions is what the player actually did, newest first:
+// transfers (from his career stints), NFL draft selection and position
+// changes. The game's end-of-season "leaving" list is only intent (players
+// can be talked into staying, and early entrants can go undrafted), so it is
+// not shown.
+func playerTransactions(events []*store.Event, picks []*store.DraftPick, stints []CareerStint, teams map[int]*store.Team, c *store.Ctx) []Transaction {
 	var out []Transaction
+	for _, d := range picks {
+		out = append(out, Transaction{Year: draftYear(c, d), Text: fmt.Sprintf("Selected in round %d of the %d NFL Draft out of %s", d.Round, draftYear(c, d), teamOr(teams, d.TeamID).Long)})
+	}
 	for i := 1; i < len(stints); i++ {
 		out = append(out, Transaction{Year: stints[i].From,
 			Text: fmt.Sprintf("Transferred from %s to %s", stints[i-1].Team.Long, stints[i].Team.Long)})
 	}
 	for _, e := range events {
-		out = append(out, Transaction{Year: c.YearOf(e.Season), Text: eventText(e, teams)})
+		if e.Kind == "leaving" {
+			continue
+		}
+		out = append(out, Transaction{Year: c.YearOf(e.Season), Text: eventText(e)})
 	}
-	// Newest first; within a year, the transfer (a later step) above the
-	// end-of-season listing that led to it.
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Year > out[j].Year })
 	return out
+}
+
+// draftYear is the NFL draft a pick was made in: the spring after his last
+// college season.
+func draftYear(c *store.Ctx, d *store.DraftPick) int { return c.YearOf(d.Season) + 1 }
+
+// awardWhen says when an award was won: the season for season awards, the
+// week and season for weekly ones.
+func awardWhen(c *store.Ctx, a *store.Award) string {
+	if a.Period == "Season" {
+		return fmt.Sprint(c.YearOf(a.PeriodIndex))
+	}
+	if a.Season < 0 {
+		return fmt.Sprintf("Week %d", a.PeriodIndex)
+	}
+	return fmt.Sprintf("Week %d, %d", a.PeriodIndex, c.YearOf(a.Season))
 }
 
 // careerTables is a player's season-by-season stats, one table per category
@@ -1613,7 +1643,7 @@ func (s *Site) awards(r *http.Request, c *store.Ctx) (string, data, error) {
 			sa.Major = append(sa.Major, a)
 		case a.Period == "Season" && a.PeriodIndex == season && (a.Type == "ALL_AM_1ST" || a.Type == "ALL_AM_2ND" || a.Type == "ALL_AM_FR"):
 			allAm = append(allAm, a)
-		case a.Period == "Game" && (a.Type == "Offensive_Player_of_Week" || a.Type == "Defensive_Player_of_Week"):
+		case a.Period == "Game" && a.Season == season && (a.Type == "Offensive_Player_of_Week" || a.Type == "Defensive_Player_of_Week"):
 			weekly = append(weekly, a)
 		}
 	}

@@ -331,7 +331,7 @@ func (in *ingest) copyForward(ctx context.Context, from, to int, stored map[int]
 		}
 	}
 	prior := "season_index < $2"
-	for _, t := range []string{"team_season", "poll_week", "player_season", "player_season_stat", "coach_season", "recruit", "player_event", "conference_season"} {
+	for _, t := range []string{"team_season", "poll_week", "player_season", "player_season_stat", "coach_season", "recruit", "player_event", "conference_season", "draft_pick"} {
 		if err := copyBranchRows(ctx, in.tx, t, from, to, prior, season); err != nil {
 			return err
 		}
@@ -757,10 +757,10 @@ func (in *ingest) write(ctx context.Context) error {
 		if id, ok := in.persons[a.PlayerRow]; ok {
 			pid = id
 		}
-		awards = append(awards, []any{b, pid, a.FirstName, a.LastName, a.TeamID, a.Position, a.AwardType, a.Period, a.PeriodIndex, sid})
+		awards = append(awards, []any{b, pid, a.FirstName, a.LastName, a.TeamID, a.Position, a.AwardType, a.Period, a.PeriodIndex, a.SeasonIndex, sid})
 	}
-	if err := upsert(ctx, tx, "award", []string{"branch_id", "person_id", "first_name", "last_name", "team_id", "position", "award_type", "period", "period_index", "snapshot_id"},
-		[]string{"branch_id", "award_type", "period", "period_index", "first_name", "last_name", "team_id"}, awards, "person_id"); err != nil {
+	if err := upsert(ctx, tx, "award", []string{"branch_id", "person_id", "first_name", "last_name", "team_id", "position", "award_type", "period", "period_index", "season_index", "snapshot_id"},
+		[]string{"branch_id", "season_index", "award_type", "period", "period_index", "first_name", "last_name", "team_id"}, awards, "person_id"); err != nil {
 		return err
 	}
 	var la [][]any
@@ -859,6 +859,15 @@ func (in *ingest) write(ctx context.Context) error {
 	if err := upsert(ctx, tx, "player_event", []string{"branch_id", "person_id", "season_index", "kind", "detail", "snapshot_id"},
 		[]string{"branch_id", "person_id", "season_index", "kind", "detail"}, ev, "snapshot_id"); err != nil {
 		return err
+	}
+	drafted := func(row int) (uuid.UUID, bool) {
+		id, ok := in.persons[row]
+		return id, ok
+	}
+	if n, err := recordDraft(ctx, tx, b, sid, in.pos, snap, drafted, func(kind string, detail any) error { return in.flag(ctx, kind, detail) }); err != nil {
+		return err
+	} else if n > 0 {
+		in.res.Notes = append(in.res.Notes, fmt.Sprintf("NFL draft: %d picks recorded", n))
 	}
 
 	if unmapped > 0 {

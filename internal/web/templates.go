@@ -53,6 +53,8 @@ func (s *Site) funcs() template.FuncMap {
 		"bowlLogo":      m.BowlLogo,
 		"trophy":        m.Trophy,
 		"awardName":     AwardName,
+		"awardWhen":     awardWhen,
+		"draftYear":     draftYear,
 		"weekLabel":     weekLabel,
 		"weekShort":     weekShort,
 		"status":        gameStatus,

@@ -58,9 +58,11 @@ func (s *Site) coach(r *http.Request, c *store.Ctx) (string, data, error) {
 	key := r.PathValue("key")
 	var p *store.CoachProfile
 	var teams map[int]*store.Team
+	var picks []*store.DraftPick
 	err := parallel(
 		func() (err error) { p, err = s.q.CoachProfile(ctx, c, key); return },
 		func() (err error) { teams, err = s.q.Teams(ctx, c, c.Season); return },
+		func() (err error) { picks, err = s.q.DraftPicks(ctx, c, store.DraftFilter{Team: -1, Coach: key}); return },
 	)
 	if err != nil {
 		return "", nil, err
@@ -151,7 +153,7 @@ func (s *Site) coach(r *http.Request, c *store.Ctx) (string, data, error) {
 	}
 	return "coach", data{"K": k, "Current": current, "Stints": rows, "Logs": logs, "Teams": teams,
 		"HCW": hcW, "HCL": hcL, "BowlW": bowlW, "BowlL": bowlL, "CFPW": cfpW, "CFPL": cfpL, "ConfTitles": confTitles,
-		"Schools": len(schools), "Seasons": len(p.Stints)}, nil
+		"Schools": len(schools), "Seasons": len(p.Stints), "Draft": picks, "FirstRound": firstRounders(picks)}, nil
 }
 
 // HistoryRow is one season on a team's history page.
@@ -166,11 +168,13 @@ func (s *Site) teamHistory(r *http.Request, c *store.Ctx) (string, data, error) 
 	var season int
 	var hist []*store.HistoryYear
 	var staff map[int]map[string]*store.Coach
+	var picks []*store.DraftPick
 	id := atoi(r.PathValue("id"), -1)
 	err := parallel(
 		func() (err error) { t, season, err = s.teamHeader(ctx, r, c); return },
 		func() (err error) { hist, err = s.q.TeamHistory(ctx, c, id); return },
 		func() (err error) { staff, err = s.q.StaffHistory(ctx, c, id); return },
+		func() (err error) { picks, err = s.q.DraftPicks(ctx, c, store.DraftFilter{Team: id}); return },
 	)
 	if err != nil {
 		return "", nil, err
@@ -216,7 +220,19 @@ func (s *Site) teamHistory(r *http.Request, c *store.Ctx) (string, data, error) 
 		}
 	}
 	return "teamhistory", data{"T": t, "Season": season, "Tab": "history", "Rows": rows, "W": w, "L": l,
-		"BowlW": bowlW, "BowlL": bowlL, "CFPW": cfpW, "CFPL": cfpL, "Titles": titles, "Ranked": ranked}, nil
+		"BowlW": bowlW, "BowlL": bowlL, "CFPW": cfpW, "CFPL": cfpL, "Titles": titles, "Ranked": ranked,
+		"Draft": picks, "FirstRound": firstRounders(picks)}, nil
+}
+
+// firstRounders counts first-round picks.
+func firstRounders(picks []*store.DraftPick) int {
+	n := 0
+	for _, d := range picks {
+		if d.Round == 1 {
+			n++
+		}
+	}
+	return n
 }
 
 // StaffRow is one school's staff on the coaches index.

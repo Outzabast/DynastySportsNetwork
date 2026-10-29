@@ -512,3 +512,34 @@ CREATE TABLE IF NOT EXISTS roster_spot (
     is_captain     boolean NOT NULL,
     PRIMARY KEY (branch_id, season_index, team_id, person_id)
 );
+
+-- Weekly awards carry only a week; the season they were won comes from the
+-- save's this-season / last-season award lists (season awards already carry
+-- it). -1 = not yet known (rows from before this column; backfill-awards).
+ALTER TABLE award ADD COLUMN IF NOT EXISTS season_index int NOT NULL DEFAULT -1;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.key_column_usage
+                 WHERE table_name = 'award' AND constraint_name = 'award_pkey' AND column_name = 'season_index') THEN
+    ALTER TABLE award DROP CONSTRAINT award_pkey;
+    ALTER TABLE award ADD PRIMARY KEY (branch_id, season_index, award_type, period, period_index, first_name, last_name, team_id);
+  END IF;
+END $$;
+
+-- NFL draft. The save keeps no per-player draft result once the draft is
+-- over; what it does keep is the LeavingPlayer list, which the draft rewrites
+-- with one EarlyNFL_<round> row per pick, and each coach's career count of
+-- players drafted. A snapshot's draft_state is its EarlyNFL rows and the head
+-- coaches' total picks; the first save after the draft differs from the one
+-- before by exactly the picks.
+ALTER TABLE snapshot ADD COLUMN IF NOT EXISTS draft_state jsonb;
+CREATE TABLE IF NOT EXISTS draft_pick (
+    branch_id     int NOT NULL,
+    person_id     uuid NOT NULL,
+    season_index  int NOT NULL,          -- the college season just finished
+    team_id       int NOT NULL,          -- school he was drafted from
+    round         int NOT NULL,
+    position      text NOT NULL,
+    snapshot_id   int NOT NULL,
+    PRIMARY KEY (branch_id, person_id)
+);
+CREATE INDEX IF NOT EXISTS draft_pick_team ON draft_pick(branch_id, team_id, season_index);

@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/outzabast/dynastysportsnetwork/internal/collector"
@@ -217,14 +218,18 @@ func runServe(args []string) error {
 	var c config
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	c.bind(fs)
+	hosted := fs.Bool("hosted", false, "run as the hosted read-only site (Cloudflare container): no watcher, media from R2")
 	fs.Parse(args)
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	p, err := openPipeline(ctx, c)
 	if err != nil {
 		return err
 	}
 	defer p.store.Close()
+	if *hosted {
+		return runHosted(ctx, p, c)
+	}
 
 	col := &collector.Collector{SavesDir: c.SavesDir, DataDir: c.DataDir, Ingest: p, Log: p.log}
 	site, err := web.New(web.Options{Store: p.store, MediaDir: c.MediaDir, Log: p.log, Status: col.Snapshot, SavesDir: c.SavesDir})
@@ -238,5 +243,6 @@ func runServe(args []string) error {
 		go col.Run(ctx)
 	}
 	p.log.Info("serving", "addr", "http://localhost"+c.Addr)
+	p.log.Info("MCP endpoint for AI agents", "url", "http://localhost"+c.Addr+"/mcp")
 	return site.ListenAndServe(ctx, c.Addr)
 }

@@ -27,6 +27,7 @@
   <div class="kpi"><span>Bowl Record</span><b>{{.BowlW}}-{{.BowlL}}</b></div>
   <div class="kpi"><span>Playoff Record</span><b>{{.CFPW}}-{{.CFPL}}</b></div>
   <div class="kpi"><span>Conference Titles</span><b>{{.ConfTitles}}</b></div>
+  {{if .Draft}}<div class="kpi"><span>NFL Draft Picks</span><b>{{len .Draft}}</b>{{if .FirstRound}}<small>{{.FirstRound}} first round</small>{{end}}</div>{{end}}
 </div>
 
 <div class="card">
@@ -46,6 +47,21 @@
     {{end}}</tbody>
   </table></div>
 </div>
+
+{{with .Draft}}
+<div class="card">
+  <h2>Players Drafted</h2>
+  <div class="tbl-wrap"><table class="tbl">
+    <thead><tr><th class="l">Draft</th><th>Rd</th><th class="l">Player</th><th class="l">Pos</th><th class="l">School</th></tr></thead>
+    <tbody>{{range .}}{{$t := index $teams .TeamID}}
+      <tr><td class="l"><b>{{draftYear $.C .}}</b></td><td>{{.Round}}</td>
+        <td class="l"><a href="/player/{{.ID}}">{{.First}} {{.Last}}</a></td><td class="l">{{.Position}}</td>
+        <td class="l">{{with $t}}<span class="tm">{{template "teamlogo" .}}{{.Name}}</span>{{end}}</td></tr>
+    {{end}}</tbody>
+  </table></div>
+  <div class="card-f muted">Players drafted out of schools he was head coach of, credited to the season they last played for him.</div>
+</div>
+{{end}}
 
 {{range .Logs}}{{$log := .}}
 <div class="card">

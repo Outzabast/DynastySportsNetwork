@@ -261,3 +261,28 @@ func (x *extractor) teamHistory(snap *Snapshot) {
 		}
 	}
 }
+
+// weeklyAwardSeasons maps PlayerAward rows to the season they were won in.
+// The PlayerAward table keeps two seasons of weekly awards with nothing on
+// the row to tell them apart; Awards.WeeklyAwards lists this season's and
+// Awards.LastSeasonWeeklyAwards last season's.
+func (x *extractor) weeklyAwardSeasons(season int) map[int]int {
+	out := map[int]int{}
+	aw := x.table("Awards")
+	pa := x.table("PlayerAward")
+	if aw == nil || pa == nil || len(aw.Records) == 0 {
+		return out
+	}
+	lists := []struct {
+		field  string
+		season int
+	}{{"LastSeasonWeeklyAwards", season - 1}, {"WeeklyAwards", season}}
+	for _, l := range lists {
+		for _, ref := range x.arrayRefs(refF(aw.Records[0], l.field)) {
+			if ref.TableID == pa.Header.TableID {
+				out[int(ref.RowNumber)] = l.season
+			}
+		}
+	}
+	return out
+}

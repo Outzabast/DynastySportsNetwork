@@ -1072,8 +1072,8 @@ type RosterEntry struct {
 	Captain        bool
 	Injury         string
 	// Departed is set when the player was on the roster during the season
-	// but not on the team at its end: "Graduated", "Transferred", "NFL Draft"
-	// or "Left team".
+	// but not on the team at its end: "NFL Draft, Rd N", "Transferred",
+	// "Graduated" or "Left team".
 	Departed string
 }
 
@@ -1095,13 +1095,10 @@ func (q *Queries) Roster(ctx context.Context, c *Ctx, season, team int) ([]*Rost
 			m.school_year, m.height, m.weight, p.home_town, p.home_state, m.star_rating,
 			m.redshirt, m.is_captain, CASE WHEN $2 = $4 THEN COALESCE(ps.injury_status, '') ELSE '' END,
 			CASE WHEN ps.team_id = $3 AND ps.on_roster THEN '' ELSE COALESCE(
-				(SELECT CASE WHEN e.detail->>'type' = 'Graduation' THEN 'Graduated'
-					WHEN e.detail->>'type' LIKE 'Transfer%' THEN 'Transferred'
-					WHEN e.detail->>'type' LIKE 'EarlyNFL%' THEN 'NFL Draft' END
-				FROM player_event e WHERE e.branch_id = $1 AND e.person_id = p.id AND e.season_index = $2 AND e.kind = 'leaving'
-				ORDER BY e.snapshot_id DESC LIMIT 1),
-				-- Seniors who leave are done with college even when the game
-				-- didn't list them as leaving.
+				(SELECT 'NFL Draft, Rd ' || d.round FROM draft_pick d WHERE d.branch_id = $1 AND d.person_id = p.id AND d.season_index = $2),
+				-- On another roster now, or next season.
+				CASE WHEN ps.on_roster AND ps.team_id <> $3 THEN 'Transferred' END,
+				(SELECT 'Transferred' FROM roster_spot r WHERE r.branch_id = $1 AND r.person_id = p.id AND r.season_index = $2 + 1 AND r.team_id <> $3 LIMIT 1),
 				CASE WHEN ps.school_year = 'Senior' THEN 'Graduated' END, 'Left team') END
 		FROM members m JOIN person p ON p.id = m.person_id
 		LEFT JOIN player_season ps ON ps.branch_id = $1 AND ps.season_index = $2 AND ps.person_id = m.person_id
@@ -1235,12 +1232,19 @@ type Award struct {
 	Type        string
 	Period      string
 	PeriodIndex int
+	Season      int // -1 when unknown
 }
 
 // Awards returns player awards, optionally for one person.
 func (q *Queries) Awards(ctx context.Context, c *Ctx, person uuid.UUID) ([]*Award, error) {
-	rows, err := q.s.DB.Query(ctx, `SELECT person_id, first_name, last_name, team_id, position, award_type, period, period_index FROM award
-		WHERE branch_id = $1 AND ($2::uuid IS NULL OR person_id = $2) ORDER BY period_index DESC, award_type`, c.Branch, nullUUID(person))
+	rows, err := q.s.DB.Query(ctx, `SELECT person_id, first_name, last_name, team_id, position, award_type, period,
+			-- The parser drops a zero week, which reads as -1: Week 0.
+			CASE WHEN period = 'Game' THEN GREATEST(period_index, 0) ELSE period_index END, season_index FROM award
+		WHERE branch_id = $1 AND ($2::uuid IS NULL OR person_id = $2)
+			-- A weekly award the save no longer lists for this or last season
+			-- is a stale row, not an award anyone won.
+			AND NOT (period = 'Game' AND season_index < 0)
+		ORDER BY season_index DESC, period_index DESC, award_type`, c.Branch, nullUUID(person))
 	if err != nil {
 		return nil, err
 	}
@@ -1248,7 +1252,7 @@ func (q *Queries) Awards(ctx context.Context, c *Ctx, person uuid.UUID) ([]*Awar
 	var out []*Award
 	for rows.Next() {
 		a := &Award{}
-		if err := rows.Scan(&a.PersonID, &a.First, &a.Last, &a.TeamID, &a.Position, &a.Type, &a.Period, &a.PeriodIndex); err != nil {
+		if err := rows.Scan(&a.PersonID, &a.First, &a.Last, &a.TeamID, &a.Position, &a.Type, &a.Period, &a.PeriodIndex, &a.Season); err != nil {
 			return nil, err
 		}
 		out = append(out, a)
@@ -1611,4 +1615,54 @@ func (r *record) apply(w, l, cw, cl, streak *int) {
 	if r.CW+r.CL > *cw+*cl {
 		*cw, *cl = r.CW, r.CL
 	}
+}
+
+// DraftPick is a player taken in the NFL draft. Season is the college season
+// he was drafted out of (the draft is held the following spring); Coach is
+// his school's head coach that season.
+type DraftPick struct {
+	PlayerRef
+	Season, Round int
+	Coach         *CoachRef
+}
+
+// CoachRef names a coach and links his page.
+type CoachRef struct {
+	Key, First, Last string
+}
+
+// DraftFilter narrows DraftPicks; zero values match everything.
+type DraftFilter struct {
+	Team   int // -1 = any
+	Person uuid.UUID
+	Coach  string // coach_key
+}
+
+// DraftPicks returns NFL draft picks, newest draft first, then by round.
+func (q *Queries) DraftPicks(ctx context.Context, c *Ctx, f DraftFilter) ([]*DraftPick, error) {
+	rows, err := q.s.DB.Query(ctx, `SELECT d.person_id, p.first_name, p.last_name, d.position, d.team_id, d.season_index, d.round,
+			COALESCE(hc.coach_key, ''), COALESCE(hc.first_name, ''), COALESCE(hc.last_name, '')
+		FROM draft_pick d JOIN person p ON p.id = d.person_id
+		LEFT JOIN LATERAL (SELECT coach_key, first_name, last_name FROM coach_season cs
+			WHERE cs.branch_id = d.branch_id AND cs.season_index = d.season_index AND cs.team_id = d.team_id AND cs.position = 'HeadCoach'
+			ORDER BY cs.snapshot_id DESC LIMIT 1) hc ON true
+		WHERE d.branch_id = $1 AND ($2 < 0 OR d.team_id = $2) AND ($3::uuid IS NULL OR d.person_id = $3) AND ($4 = '' OR hc.coach_key = $4)
+		ORDER BY d.season_index DESC, d.round, p.last_name, p.first_name`, c.Branch, f.Team, nullUUID(f.Person), f.Coach)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*DraftPick
+	for rows.Next() {
+		d := &DraftPick{}
+		var k CoachRef
+		if err := rows.Scan(&d.ID, &d.First, &d.Last, &d.Position, &d.TeamID, &d.Season, &d.Round, &k.Key, &k.First, &k.Last); err != nil {
+			return nil, err
+		}
+		if k.Key != "" {
+			d.Coach = &k
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
 }

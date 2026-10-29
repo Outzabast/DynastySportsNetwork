@@ -254,6 +254,7 @@ func (s *Site) exportPlayer(r *http.Request, c *store.Ctx) (*xdoc, error) {
 		lines  []*store.SeasonLine
 		awards []*store.Award
 		events []*store.Event
+		picks  []*store.DraftPick
 	)
 	err = parallel(
 		func() (err error) { bio, err = s.q.Person(ctx, c, id); return },
@@ -261,6 +262,7 @@ func (s *Site) exportPlayer(r *http.Request, c *store.Ctx) (*xdoc, error) {
 		func() (err error) { lines, err = s.q.SeasonLines(ctx, c, -1, id, -1); return },
 		func() (err error) { awards, err = s.q.Awards(ctx, c, id); return },
 		func() (err error) { events, err = s.q.Events(ctx, c, id); return },
+		func() (err error) { picks, err = s.q.DraftPicks(ctx, c, store.DraftFilter{Team: -1, Person: id}); return },
 	)
 	if err != nil {
 		return nil, err
@@ -306,15 +308,11 @@ func (s *Site) exportPlayer(r *http.Request, c *store.Ctx) (*xdoc, error) {
 	if len(awards) > 0 {
 		xt := &xtable{Title: "Awards and Honors", Headers: []string{"When", "Award", "Team"}}
 		for _, a := range awards {
-			when := fmt.Sprint(c.YearOf(a.PeriodIndex))
-			if a.Period != "Season" {
-				when = fmt.Sprintf("Week %d", a.PeriodIndex)
-			}
-			xt.Rows = append(xt.Rows, []string{when, AwardName(a.Type), teamOr(teams, a.TeamID).Name})
+			xt.Rows = append(xt.Rows, []string{awardWhen(c, a), AwardName(a.Type), teamOr(teams, a.TeamID).Name})
 		}
 		profile.Tables = append(profile.Tables, xt)
 	}
-	if tx := playerTransactions(events, careerStints(lines, teams, c), teams, c); len(tx) > 0 {
+	if tx := playerTransactions(events, picks, careerStints(lines, teams, c), teams, c); len(tx) > 0 {
 		xt := &xtable{Title: "Transactions", Headers: []string{"Season", "Event"}}
 		for _, t := range tx {
 			xt.Rows = append(xt.Rows, []string{fmt.Sprint(t.Year), t.Text})
@@ -656,30 +654,10 @@ func playerMeta(b *store.Bio, team *store.Team) []xkv {
 	return m
 }
 
-// eventText is a player event in plain words. "leaving" comes from the
-// game's end-of-season list of players expected to leave: an intent, not a
-// completed move (a player can still be talked into staying).
-func eventText(e *store.Event, teams map[int]*store.Team) string {
-	switch e.Kind {
-	case "position_change":
+// eventText is a player event in plain words.
+func eventText(e *store.Event) string {
+	if e.Kind == "position_change" {
 		return fmt.Sprintf("Moved from %v to %v", e.Detail["from"], e.Detail["to"])
-	case "leaving":
-		from := "" // " from Charlotte", when the event names the team
-		if id, ok := e.Detail["team"].(float64); ok && int(id) >= 0 {
-			from = " from " + teamOr(teams, int(id)).Long
-		}
-		kind := fmt.Sprint(e.Detail["type"])
-		switch {
-		case kind == "Graduation":
-			return "Set to graduate" + from
-		case strings.HasPrefix(kind, "Transfer_"):
-			reason := strings.ToLower(prettyEnum(strings.TrimPrefix(kind, "Transfer_")))
-			reason = strings.Replace(reason, "contenter", "contender", 1) // the game's spelling
-			return fmt.Sprintf("Announced plans to transfer%s (reason: %s)", from, reason)
-		case strings.HasPrefix(kind, "EarlyNFL_"):
-			return fmt.Sprintf("Announced plans to enter the NFL Draft (projected round %s)", strings.TrimPrefix(kind, "EarlyNFL_"))
-		}
-		return "Expected to leave the program: " + prettyEnum(kind)
 	}
 	return prettyEnum(e.Kind)
 }

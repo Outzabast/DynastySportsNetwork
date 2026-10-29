@@ -8,6 +8,7 @@
   <div class="kpi"><span>Playoff Record</span><b>{{.CFPW}}-{{.CFPL}}</b></div>
   <div class="kpi"><span>Conference Titles</span><b>{{.Titles}}</b></div>
   <div class="kpi"><span>Ranked Finishes</span><b>{{.Ranked}}</b></div>
+  <div class="kpi"><span>NFL Draft Picks</span><b>{{len .Draft}}</b>{{if .FirstRound}}<small>{{.FirstRound}} first round</small>{{end}}</div>
 </div>
 <div class="card">
   <h2>Season by Season</h2>
@@ -27,5 +28,17 @@
     {{else}}<tr><td colspan="9" class="l muted">No season history yet.</td></tr>{{end}}</tbody>
   </table></div>
   <div class="card-f muted">Seasons before the site's first capture come from the game's own season history, which names the head coach only. Box scores and full staffs start with the first captured season.</div>
+</div>
+<div class="card" id="draft">
+  <h2>NFL Draft</h2>
+  <div class="tbl-wrap"><table class="tbl">
+    <thead><tr><th class="l">Draft</th><th>Rd</th><th class="l">Player</th><th class="l">Pos</th><th class="l">Head Coach</th></tr></thead>
+    <tbody>{{range .Draft}}
+      <tr><td class="l"><b>{{draftYear $.C .}}</b></td><td>{{.Round}}</td>
+        <td class="l"><a href="/player/{{.ID}}">{{.First}} {{.Last}}</a></td><td class="l">{{.Position}}</td>
+        <td class="l">{{with .Coach}}<a href="{{coachURL .Key}}">{{.First}} {{.Last}}</a>{{else}}<span class="muted">-</span>{{end}}</td></tr>
+    {{else}}<tr><td colspan="5" class="l muted">No players drafted yet.</td></tr>{{end}}</tbody>
+  </table></div>
+  <div class="card-f muted">Draft picks are recorded from the 2036 draft on: earlier drafts happened before the site could tell who was picked.</div>
 </div>
 {{end}}

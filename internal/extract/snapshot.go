@@ -199,6 +199,10 @@ type Coach struct {
 	SeasonsWithTeam int    `json:"seasonsWithTeam"`
 	YearsCoaching   int    `json:"yearsCoaching"`
 	HomeState       string `json:"homeState"`
+	// DraftPicks is the coach's career count of players drafted into the NFL
+	// (CareerCoachStats.DraftPicks); the game credits each pick to the
+	// staff at the draft.
+	DraftPicks int `json:"draftPicks"`
 }
 
 // Game is one SeasonGame row in the current season.
@@ -324,6 +328,10 @@ type PlayerAward struct {
 	AwardType   string `json:"awardType"`
 	Period      string `json:"period"`
 	PeriodIndex int    `json:"periodIndex"`
+	// SeasonIndex is the season the award was won: weekly awards sit in the
+	// save's this-season or last-season list, season awards carry it as
+	// their PeriodIndex. -1 when unknown.
+	SeasonIndex int `json:"seasonIndex"`
 }
 
 type LeagueAward struct {
@@ -382,6 +390,7 @@ type Injury struct {
 }
 
 type LeavingPlayer struct {
+	Row       int    `json:"row"` // LeavingPlayer table row
 	PlayerRow int    `json:"playerRow"`
 	TeamID    int    `json:"teamId"`
 	LeaveType string `json:"leaveType"`

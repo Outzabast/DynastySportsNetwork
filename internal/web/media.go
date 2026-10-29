@@ -52,9 +52,12 @@ func listDir(dir string) []string {
 	return out
 }
 
-func indexBy(dir, prefix, suffix string) map[string]string {
+// lister returns the entry names in a media subfolder ("" is the root).
+type lister func(rel string) []string
+
+func indexBy(list lister, rel, prefix, suffix string) map[string]string {
 	m := map[string]string{}
-	for _, f := range listDir(dir) {
+	for _, f := range list(rel) {
 		if !strings.HasPrefix(f, prefix) || !strings.HasSuffix(f, suffix) {
 			continue
 		}
@@ -63,24 +66,53 @@ func indexBy(dir, prefix, suffix string) map[string]string {
 	return m
 }
 
+// newMediaIndex indexes the media folder on disk.
 func newMediaIndex(dir string) *mediaIndex {
-	m := &mediaIndex{dir: dir, portraits: map[string]bool{}, coaches: map[string]bool{}, confs: map[string]string{}}
-	m.logos = indexBy(filepath.Join(dir, "logos-flat-dark"), "tlow_", ".webp")
-	m.logos3d = indexBy(filepath.Join(dir, "3d_logos", "png_OL"), "", "_OL.webp")
-	m.helmets = indexBy(filepath.Join(dir, "helmet", "left"), "thel_lthelmets_", "_result.webp")
-	m.bowls = indexBy(filepath.Join(dir, "bowlgames"), "bowl_", ".webp")
-	for _, f := range listDir(filepath.Join(dir, "playerportrait")) {
+	m := buildMediaIndex(func(rel string) []string { return listDir(filepath.Join(dir, filepath.FromSlash(rel))) })
+	m.dir = dir
+	return m
+}
+
+// newManifestIndex indexes a list of media paths ("playerportrait/nilpp_1.webp")
+// instead of a folder, for the hosted site whose media lives in R2.
+func newManifestIndex(paths []string) *mediaIndex {
+	dirs := map[string][]string{}
+	seen := map[string]bool{}
+	for _, p := range paths {
+		p = strings.Trim(strings.ReplaceAll(p, "\\", "/"), "/")
+		for p != "" {
+			dir, name := "", p
+			if i := strings.LastIndex(p, "/"); i >= 0 {
+				dir, name = p[:i], p[i+1:]
+			}
+			if !seen[p] {
+				seen[p] = true
+				dirs[dir] = append(dirs[dir], name)
+			}
+			p = dir
+		}
+	}
+	return buildMediaIndex(func(rel string) []string { return dirs[rel] })
+}
+
+func buildMediaIndex(list lister) *mediaIndex {
+	m := &mediaIndex{portraits: map[string]bool{}, coaches: map[string]bool{}, confs: map[string]string{}}
+	m.logos = indexBy(list, "logos-flat-dark", "tlow_", ".webp")
+	m.logos3d = indexBy(list, "3d_logos/png_OL", "", "_OL.webp")
+	m.helmets = indexBy(list, "helmet/left", "thel_lthelmets_", "_result.webp")
+	m.bowls = indexBy(list, "bowlgames", "bowl_", ".webp")
+	for _, f := range list("playerportrait") {
 		m.portraits[strings.TrimSuffix(strings.TrimPrefix(f, "nilpp_"), ".webp")] = true
 	}
-	for _, f := range listDir(filepath.Join(dir, "coaches")) {
+	for _, f := range list("coaches") {
 		m.coaches[strings.TrimSuffix(strings.TrimPrefix(f, "nilcp_"), ".webp")] = true
 	}
-	confDir := filepath.Join(dir, "All Logos", "Conferences")
-	for _, sub := range listDir(confDir) {
-		files := listDir(filepath.Join(confDir, sub))
+	const confDir = "All Logos/Conferences"
+	for _, sub := range list(confDir) {
+		files := append([]string(nil), list(confDir+"/"+sub)...)
 		sort.Strings(files)
 		if len(files) > 0 {
-			m.confs[norm(sub)] = "All Logos/Conferences/" + sub + "/" + files[len(files)-1]
+			m.confs[norm(sub)] = confDir + "/" + sub + "/" + files[len(files)-1]
 		}
 	}
 	return m

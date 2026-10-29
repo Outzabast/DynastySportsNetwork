@@ -19,6 +19,7 @@
     <div><dt>HT/WT</dt><dd>{{height $p.Height}}, {{$p.Weight}} lbs</dd></div>
     <div><dt>Hometown</dt><dd>{{$p.HomeTown}}, {{pretty $p.HomeState}}</dd></div>
     {{if gt (len .Stints) 1}}<div><dt>Career</dt><dd>{{range $i, $s := .Stints}}{{if $i}} &rarr; {{end}}<a href="{{teamURL $s.Team}}">{{$s.Team.Name}}</a> <span class="muted">{{$s.Years}}</span>{{end}}</dd></div>{{end}}
+    {{with .Draft}}<div><dt>Draft</dt><dd>{{draftYear $.C .}}: Round {{.Round}}{{with index $.Teams .TeamID}} &middot; {{.Short}}{{end}}</dd></div>{{end}}
     {{if $p.Stars}}<div><dt>Recruiting</dt><dd class="stars">{{stars $p.Stars}}</dd></div>{{end}}
     {{if and $p.Injury (ne $p.Injury "Uninjured")}}<div><dt>Status</dt><dd class="loss">{{pretty $p.Injury}}</dd></div>{{end}}
     {{if $p.Captain}}<div><dt>Role</dt><dd>Team Captain</dd></div>{{end}}
@@ -65,7 +66,7 @@
     <div class="card">
       <h2>Awards &amp; Honors</h2>
       {{range .}}<div class="award">{{with trophy .Type}}<img class="tr" src="{{.}}" alt="">{{end}}
-        <div><div class="w">{{awardName .Type}}</div><div class="an">{{if eq .Period "Season"}}{{year $.C .PeriodIndex}}{{else}}Week {{.PeriodIndex}}{{end}}{{with index $.Teams .TeamID}} &middot; {{.Short}}{{end}}</div></div></div>{{end}}
+        <div><div class="w">{{awardName .Type}}</div><div class="an">{{awardWhen $.C .}}{{with index $.Teams .TeamID}} &middot; {{.Short}}{{end}}</div></div></div>{{end}}
     </div>
     {{end}}
     {{with .Transactions}}

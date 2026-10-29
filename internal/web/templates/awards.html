@@ -30,7 +30,7 @@
   <div>
     {{with .Weekly}}
     <div class="card">
-      <h2>Players of the Week</h2>
+      <h2>{{year $.C $.Season}} Players of the Week</h2>
       {{range .}}{{$t := team $teams .TeamID}}<div class="rank-row">{{template "teamlogo" $t}}<div class="t">{{if .PersonID}}<a href="/player/{{.PersonID}}">{{.First}} {{.Last}}</a>{{else}}{{.First}} {{.Last}}{{end}}<div class="muted small" style="font-weight:400">{{awardName .Type}}</div></div><span class="r">Wk {{.PeriodIndex}}</span></div>{{end}}
     </div>
     {{end}}

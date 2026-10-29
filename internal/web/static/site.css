@@ -106,6 +106,9 @@ img { max-width: 100%; }
 .weeks a span { display: block; font-weight: 400; color: var(--muted); font-size: 11px; }
 .pill { display: inline-block; border: 1px solid var(--line); border-radius: 20px; padding: 4px 12px; font-size: 12px; font-weight: 700; color: var(--ink-2); background: #fff; }
 .pill.on { background: var(--ink); color: #fff; border-color: var(--ink); }
+a.pill:hover { text-decoration: none; border-color: var(--ink-2); }
+.log-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 8px; }
+#gamelog { scroll-margin-top: 16px; }
 .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 4px; overflow: hidden; }
 .seg a { padding: 6px 12px; font-size: 12px; font-weight: 700; color: var(--ink-2); background: #fff; }
 .seg a + a { border-left: 1px solid var(--line); }

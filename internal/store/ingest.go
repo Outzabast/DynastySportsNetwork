@@ -336,6 +336,11 @@ func (in *ingest) copyForward(ctx context.Context, from, to int, stored map[int]
 			return err
 		}
 	}
+	// Roster spots: prior seasons, plus this season's from saves before the fork.
+	if err := copyBranchRows(ctx, in.tx, "roster_spot", from, to,
+		"season_index < $2 OR (season_index = $2 AND first_snapshot IN (SELECT id FROM snapshot WHERE branch_id = $1 AND pos < $3))", season, in.pos); err != nil {
+		return err
+	}
 	gameScoped := "season_index < $2 OR (season_index = $2 AND game_row = ANY($3::int[]))"
 	for _, t := range []string{"game", "player_game_stat", "scoring_play"} {
 		if err := copyBranchRows(ctx, in.tx, t, from, to, gameScoped, season, agree); err != nil {
@@ -625,6 +630,10 @@ func (in *ingest) write(ctx context.Context) error {
 	if err := upsert(ctx, tx, "player_season", []string{"branch_id", "season_index", "person_id", "team_id", "on_roster", "position", "school_year", "redshirt",
 		"jersey", "height", "weight", "star_rating", "portrait", "is_captain", "injury_status", "snapshot_id"},
 		[]string{"branch_id", "season_index", "person_id"}, pseason); err != nil {
+		return err
+	}
+	if err := upsert(ctx, tx, "roster_spot", rosterSpotCols, rosterSpotKey,
+		rosterSpots(snap, b, sid, person), "first_snapshot"); err != nil {
 		return err
 	}
 

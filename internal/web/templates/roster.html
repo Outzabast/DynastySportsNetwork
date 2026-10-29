@@ -1,19 +1,32 @@
 {{define "title"}}{{.T.Long}} Roster{{end}}
 {{define "content"}}
 {{template "teamhead" .}}
-<p class="muted small">{{.Count}} players on the {{year .C .Season}} roster.</p>
+<p class="muted small">{{.Count}} players on the {{year .C .Season}} roster{{if .Departed}}, including {{.Departed}} who left the team during or after the season{{end}}.</p>
+<div class="filters" id="roster-filters">
+  <input type="search" id="rf-q" placeholder="Search players" aria-label="Search players">
+  <select id="rf-side" aria-label="Side"><option value="">All sides</option>{{range .Groups}}{{if .Players}}<option>{{.Name}}</option>{{end}}{{end}}</select>
+  <select id="rf-pos" aria-label="Position"><option value="">All positions</option></select>
+  <select id="rf-class" aria-label="Class"><option value="">All classes</option><option value="FR">Freshmen</option><option value="SO">Sophomores</option><option value="JR">Juniors</option><option value="SR">Seniors</option><option value="GR">Graduates</option><option value="RS">Redshirts</option></select>
+  {{if .Departed}}<select id="rf-status" aria-label="Status"><option value="">Everyone</option><option value="stayed">Finished the season with the team</option><option value="left">Left the team</option></select>{{end}}
+  <span class="muted small" id="rf-count"></span>
+</div>
+{{$departed := .Departed}}
 {{range .Groups}}{{if .Players}}
-<div class="card">
+<div class="card roster-group" data-side="{{.Name}}">
   <h2>{{.Name}}</h2>
-  <div class="tbl-wrap"><table class="tbl">
-    <thead><tr><th class="l">Name</th><th class="l">POS</th><th class="l">#</th><th class="l">HT</th><th class="l">WT</th><th class="l">Class</th><th class="l">Hometown</th><th class="l">Recruit</th></tr></thead>
+  <div class="tbl-wrap"><table class="tbl roster-tbl">
+    <thead><tr><th class="l" data-sort="text">Name</th><th class="l" data-sort="pos">POS</th><th class="l" data-sort="num">#</th><th class="l" data-sort="num">HT</th><th class="l" data-sort="num">WT</th><th class="l" data-sort="class">Class</th><th class="l" data-sort="text">Hometown</th><th class="l" data-sort="num">Recruit</th>{{if $departed}}<th class="l" data-sort="text">Status</th>{{end}}</tr></thead>
     <tbody>{{range .Players}}
-      <tr><td><span class="tm"><img src="{{portrait .Portrait}}" alt="" loading="lazy" style="width:32px;height:32px;border-radius:50%;object-fit:cover;object-position:top;background:#f2f2f2"><a href="/player/{{.ID}}">{{.Name}}</a>{{if .Captain}}<span class="sub" title="Team captain">C</span>{{end}}{{if and .Injury (ne .Injury "Uninjured")}}<span class="sub loss" title="{{pretty .Injury}}">INJ</span>{{end}}</span></td>
-        <td class="l">{{.Position}}</td><td class="l">{{.Jersey}}</td><td class="l">{{height .Height}}</td><td class="l">{{.Weight}} lbs</td><td class="l">{{classYr .ClassYear .Redshirt}}</td><td class="l">{{.HomeTown}}, {{.HomeState}}</td><td class="l stars">{{stars .Stars}}</td></tr>
+      <tr data-pos="{{.Position}}" data-class="{{classYr .ClassYear .Redshirt}}" data-left="{{if .Departed}}1{{end}}">
+        <td data-v="{{.Last}} {{.First}}"><span class="tm"><img src="{{portrait .Portrait}}" alt="" loading="lazy" style="width:32px;height:32px;border-radius:50%;object-fit:cover;object-position:top;background:#f2f2f2"><a href="/player/{{.ID}}">{{.Name}}</a>{{if .Captain}}<span class="sub" title="Team captain">C</span>{{end}}{{if and .Injury (ne .Injury "Uninjured")}}<span class="sub loss" title="{{pretty .Injury}}">INJ</span>{{end}}</span></td>
+        <td class="l">{{.Position}}</td><td class="l" data-v="{{.Jersey}}">{{.Jersey}}</td><td class="l" data-v="{{.Height}}">{{height .Height}}</td><td class="l" data-v="{{.Weight}}">{{.Weight}} lbs</td>
+        <td class="l">{{classYr .ClassYear .Redshirt}}</td><td class="l">{{.HomeTown}}, {{pretty .HomeState}}</td><td class="l stars" data-v="{{.Stars}}">{{stars .Stars}}</td>
+        {{if $departed}}<td class="l{{if .Departed}} muted{{end}}">{{if .Departed}}{{.Departed}}{{else}}On roster{{end}}</td>{{end}}</tr>
     {{end}}</tbody>
   </table></div>
 </div>
 {{end}}{{end}}
+<p class="muted small" id="rf-none" hidden>No players match these filters.</p>
 {{with .Depth}}
 <div class="card">
   <h2>Depth Chart</h2>
@@ -23,4 +36,75 @@
   </table></div>
 </div>
 {{end}}
+<script>
+(function () {
+  var POS = ['QB','HB','FB','WR','TE','LT','LG','C','RG','RT','LE','RE','DT','LOLB','MLB','ROLB','CB','FS','SS','K','P','LS'];
+  var CLS = {FR: 1, SO: 2, JR: 3, SR: 4, GR: 5};
+  var $ = function (id) { return document.getElementById(id); };
+  var groups = Array.prototype.slice.call(document.querySelectorAll('.roster-group'));
+  var rows = Array.prototype.slice.call(document.querySelectorAll('.roster-tbl tbody tr'));
+  function posKey(p) { var i = POS.indexOf(p); return i < 0 ? 99 : i; }
+  function classKey(c) { return (CLS[c.replace('RS ', '')] || 9) + (c.indexOf('RS ') === 0 ? 0.5 : 0); }
+
+  // Position choices, in football order, from the players listed.
+  var seen = {};
+  rows.forEach(function (r) { seen[r.dataset.pos] = true; });
+  Object.keys(seen).sort(function (a, b) { return posKey(a) - posKey(b) || a.localeCompare(b); }).forEach(function (p) {
+    var o = document.createElement('option'); o.textContent = p; $('rf-pos').appendChild(o);
+  });
+
+  function apply() {
+    var q = $('rf-q').value.trim().toLowerCase(), side = $('rf-side').value, pos = $('rf-pos').value,
+        cls = $('rf-class').value, status = $('rf-status') ? $('rf-status').value : '';
+    var shown = 0;
+    groups.forEach(function (g) {
+      var any = false;
+      Array.prototype.forEach.call(g.querySelectorAll('tbody tr'), function (r) {
+        var c = r.dataset['class'];
+        var ok = (!side || g.dataset.side === side) && (!pos || r.dataset.pos === pos) &&
+          (!cls || (cls === 'RS' ? c.indexOf('RS ') === 0 : c.replace('RS ', '') === cls)) &&
+          (!status || (status === 'left') === (r.dataset.left === '1')) &&
+          (!q || r.cells[0].textContent.toLowerCase().indexOf(q) >= 0);
+        r.hidden = !ok;
+        if (ok) { any = true; shown++; }
+      });
+      g.hidden = !any;
+    });
+    $('rf-count').textContent = shown === rows.length ? rows.length + ' players' : 'Showing ' + shown + ' of ' + rows.length + ' players';
+    $('rf-none').hidden = shown > 0;
+  }
+  ['rf-q', 'rf-side', 'rf-pos', 'rf-class', 'rf-status'].forEach(function (id) {
+    var el = $(id);
+    if (el) el.addEventListener(el.tagName === 'INPUT' ? 'input' : 'change', apply);
+  });
+
+  // Click a column to sort every group by it; click again to reverse.
+  var arrows = / [▲▼]$/;
+  Array.prototype.forEach.call(document.querySelectorAll('.roster-tbl th[data-sort]'), function (th) {
+    th.style.cursor = 'pointer';
+    th.title = 'Sort by ' + th.textContent;
+    th.addEventListener('click', function () {
+      var col = th.cellIndex, kind = th.dataset.sort, dir = th.dataset.dir === 'asc' ? 'desc' : 'asc';
+      Array.prototype.forEach.call(document.querySelectorAll('.roster-tbl'), function (tbl) {
+        Array.prototype.forEach.call(tbl.tHead.rows[0].cells, function (h) {
+          h.classList.remove('sorted'); delete h.dataset.dir; h.textContent = h.textContent.replace(arrows, '');
+        });
+        var h = tbl.tHead.rows[0].cells[col];
+        h.classList.add('sorted'); h.dataset.dir = dir; h.textContent += dir === 'asc' ? ' ▲' : ' ▼';
+        var body = tbl.tBodies[0], list = Array.prototype.slice.call(body.rows);
+        list.sort(function (a, b) {
+          var x = a.cells[col], y = b.cells[col], r;
+          if (kind === 'num') r = (+x.dataset.v || 0) - (+y.dataset.v || 0);
+          else if (kind === 'pos') r = posKey(a.dataset.pos) - posKey(b.dataset.pos);
+          else if (kind === 'class') r = classKey(a.dataset['class']) - classKey(b.dataset['class']);
+          else r = (x.dataset.v || x.textContent).localeCompare(y.dataset.v || y.textContent);
+          return dir === 'asc' ? r : -r;
+        });
+        list.forEach(function (r) { body.appendChild(r); });
+      });
+    });
+  });
+  apply();
+})();
+</script>
 {{end}}

@@ -97,7 +97,6 @@ func (s *Site) funcs() template.FuncMap {
 			}
 			return t.Rank()
 		},
-		"leave": func(s string) string { return prettyEnum(strings.TrimPrefix(s, "Transfer_")) },
 		"seq": func(n int) []int {
 			out := make([]int, n)
 			for i := range out {

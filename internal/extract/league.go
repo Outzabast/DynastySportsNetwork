@@ -1,6 +1,7 @@
 package extract
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/leaguelines/cfb-dynasty/dynasty"
@@ -76,6 +77,74 @@ func (x *extractor) conferences(snap *Snapshot) {
 			}
 		}
 		snap.Conferences = append(snap.Conferences, c)
+	}
+}
+
+// seasonConferences pins each team's conference and division to the season
+// the save is labeled with. Realignment applies in the offseason while the
+// save still carries the finished season's label, so by then the live Team
+// and Conference rows show next season's lineup (a team promoted to the SEC
+// would turn its CUSA title game into an "SEC Championship"). Each team's
+// season-by-season history keeps the conference it played that year in, so
+// when that differs from the live one, history wins and the conference
+// structure is rebuilt from it. In-season saves are left as they are.
+func (x *extractor) seasonConferences(snap *Snapshot) {
+	type confDiv struct{ conf, div string }
+	played := map[int]confDiv{}
+	for _, h := range snap.TeamHistory {
+		if h.Year == snap.Season.Year && h.Conference != "" {
+			played[h.TeamID] = confDiv{h.Conference, h.Division}
+		}
+	}
+	realigned := false
+	for _, t := range snap.Teams {
+		if h, ok := played[t.ID]; ok && h.conf != t.Conference {
+			realigned = true
+			break
+		}
+	}
+	if !realigned {
+		return
+	}
+	for i := range snap.Teams {
+		if h, ok := played[snap.Teams[i].ID]; ok {
+			snap.Teams[i].Conference = h.conf
+		}
+	}
+	// Rebuild each conference's divisions from the teams that played in it,
+	// keeping the save's division order where the names still exist.
+	for ci := range snap.Conferences {
+		c := &snap.Conferences[ci]
+		var order []string
+		members := map[string][]int{}
+		for _, d := range c.Divisions {
+			order = append(order, d.Name)
+		}
+		for _, t := range snap.Teams {
+			if t.Conference != c.Name {
+				continue
+			}
+			div := played[t.ID].div
+			if _, ok := members[div]; !ok && !slices.Contains(order, div) {
+				order = append(order, div)
+			}
+			members[div] = append(members[div], t.ID)
+		}
+		c.Divisions = nil
+		for _, name := range order {
+			if len(members[name]) > 0 {
+				c.Divisions = append(c.Divisions, Division{Name: name, TeamIDs: members[name]})
+			}
+		}
+		split := len(c.Divisions) > 1
+		for i := range snap.Teams {
+			if snap.Teams[i].Conference == c.Name {
+				snap.Teams[i].Division = ""
+				if split {
+					snap.Teams[i].Division = played[snap.Teams[i].ID].div
+				}
+			}
+		}
 	}
 }
 

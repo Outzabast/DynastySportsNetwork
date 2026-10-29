@@ -934,13 +934,42 @@ func nullUUID(id uuid.UUID) any {
 // GameLog is a player's line in one game.
 type GameLog struct {
 	Game  *Game
+	Team  int // the team the player played for in this game
 	Group string
 	Stats Stats
 }
 
+// LogSeason is a season in which a person has game-by-game lines, and the
+// team they played for (the one with the most games, should they have moved
+// mid-season).
+type LogSeason struct {
+	Season int
+	Team   int
+}
+
+// PlayerLogSeasons lists the seasons with game-by-game lines, newest first.
+func (q *Queries) PlayerLogSeasons(ctx context.Context, c *Ctx, person uuid.UUID) ([]LogSeason, error) {
+	rows, err := q.s.DB.Query(ctx, `SELECT DISTINCT ON (season_index) season_index, team_id FROM player_game_stat
+		WHERE branch_id = $1 AND person_id = $2
+		GROUP BY season_index, team_id ORDER BY season_index DESC, count(DISTINCT game_row) DESC, team_id`, c.Branch, person)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []LogSeason
+	for rows.Next() {
+		var ls LogSeason
+		if err := rows.Scan(&ls.Season, &ls.Team); err != nil {
+			return nil, err
+		}
+		out = append(out, ls)
+	}
+	return out, rows.Err()
+}
+
 // PlayerGameLog returns a person's game lines for a season.
 func (q *Queries) PlayerGameLog(ctx context.Context, c *Ctx, season int, person uuid.UUID) ([]*GameLog, error) {
-	rows, err := q.s.DB.Query(ctx, `SELECT s.game_row, s.category, s.stats FROM player_game_stat s WHERE s.branch_id = $1 AND s.season_index = $2 AND s.person_id = $3`,
+	rows, err := q.s.DB.Query(ctx, `SELECT s.game_row, s.team_id, s.category, s.stats FROM player_game_stat s WHERE s.branch_id = $1 AND s.season_index = $2 AND s.person_id = $3`,
 		c.Branch, season, person)
 	if err != nil {
 		return nil, err
@@ -950,17 +979,19 @@ func (q *Queries) PlayerGameLog(ctx context.Context, c *Ctx, season int, person 
 		group string
 	}
 	acc := map[key]Stats{}
+	team := map[int]int{}
 	var keys []key
 	for rows.Next() {
-		var row int
+		var row, tm int
 		var cat string
 		var raw []byte
-		if err := rows.Scan(&row, &cat, &raw); err != nil {
+		if err := rows.Scan(&row, &tm, &cat, &raw); err != nil {
 			rows.Close()
 			return nil, err
 		}
 		var st Stats
 		json.Unmarshal(raw, &st)
+		team[row] = tm
 		k := key{row, Group(cat)}
 		if _, ok := acc[k]; !ok {
 			acc[k] = Stats{}
@@ -990,7 +1021,7 @@ func (q *Queries) PlayerGameLog(ctx context.Context, c *Ctx, season int, person 
 	var out []*GameLog
 	for _, k := range keys {
 		if g := gameRows[k.row]; g != nil {
-			out = append(out, &GameLog{Game: g, Group: k.group, Stats: acc[k]})
+			out = append(out, &GameLog{Game: g, Team: team[k.row], Group: k.group, Stats: acc[k]})
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Game.Week < out[j].Game.Week })
@@ -1040,14 +1071,41 @@ type RosterEntry struct {
 	Redshirt       string
 	Captain        bool
 	Injury         string
+	// Departed is set when the player was on the roster during the season
+	// but not on the team at its end: "Graduated", "Transferred", "NFL Draft"
+	// or "Left team".
+	Departed string
 }
 
-// Roster returns a team's roster for a season.
+// Roster returns everyone on a team's roster during a season. Seasons
+// recorded in roster_spot list every player seen on the roster in an
+// in-season save, departures included, with each player's bio as of his last
+// in-season save. Older data falls back to the season's latest bios, which
+// miss players who left before that save. Injuries show only for the
+// current season.
 func (q *Queries) Roster(ctx context.Context, c *Ctx, season, team int) ([]*RosterEntry, error) {
-	rows, err := q.s.DB.Query(ctx, `SELECT p.id, p.first_name, p.last_name, ps.position, ps.jersey, ps.team_id, ps.portrait, ps.school_year, ps.height, ps.weight,
-		p.home_town, p.home_state, ps.star_rating, ps.redshirt, ps.is_captain, ps.injury_status
-		FROM player_season ps JOIN person p ON p.id = ps.person_id
-		WHERE ps.branch_id = $1 AND ps.season_index = $2 AND ps.team_id = $3 AND ps.on_roster ORDER BY ps.jersey, p.last_name`, c.Branch, season, team)
+	rows, err := q.s.DB.Query(ctx, `WITH spots AS (
+			SELECT * FROM roster_spot WHERE branch_id = $1 AND season_index = $2 AND team_id = $3),
+		members AS (
+			SELECT person_id, position, jersey, portrait, school_year, height, weight, star_rating, redshirt, is_captain FROM spots
+			UNION ALL
+			SELECT person_id, position, jersey, portrait, school_year, height, weight, star_rating, redshirt, is_captain FROM player_season
+			WHERE branch_id = $1 AND season_index = $2 AND team_id = $3 AND on_roster AND NOT EXISTS (SELECT 1 FROM spots))
+		SELECT p.id, p.first_name, p.last_name, m.position, m.jersey, $3::int, m.portrait,
+			m.school_year, m.height, m.weight, p.home_town, p.home_state, m.star_rating,
+			m.redshirt, m.is_captain, CASE WHEN $2 = $4 THEN COALESCE(ps.injury_status, '') ELSE '' END,
+			CASE WHEN ps.team_id = $3 AND ps.on_roster THEN '' ELSE COALESCE(
+				(SELECT CASE WHEN e.detail->>'type' = 'Graduation' THEN 'Graduated'
+					WHEN e.detail->>'type' LIKE 'Transfer%' THEN 'Transferred'
+					WHEN e.detail->>'type' LIKE 'EarlyNFL%' THEN 'NFL Draft' END
+				FROM player_event e WHERE e.branch_id = $1 AND e.person_id = p.id AND e.season_index = $2 AND e.kind = 'leaving'
+				ORDER BY e.snapshot_id DESC LIMIT 1),
+				-- Seniors who leave are done with college even when the game
+				-- didn't list them as leaving.
+				CASE WHEN ps.school_year = 'Senior' THEN 'Graduated' END, 'Left team') END
+		FROM members m JOIN person p ON p.id = m.person_id
+		LEFT JOIN player_season ps ON ps.branch_id = $1 AND ps.season_index = $2 AND ps.person_id = m.person_id
+		ORDER BY m.jersey, p.last_name`, c.Branch, season, team, c.Season)
 	if err != nil {
 		return nil, err
 	}
@@ -1056,7 +1114,7 @@ func (q *Queries) Roster(ctx context.Context, c *Ctx, season, team int) ([]*Rost
 	for rows.Next() {
 		r := &RosterEntry{}
 		if err := rows.Scan(&r.ID, &r.First, &r.Last, &r.Position, &r.Jersey, &r.TeamID, &r.Portrait, &r.ClassYear, &r.Height, &r.Weight, &r.HomeTown, &r.HomeState,
-			&r.Stars, &r.Redshirt, &r.Captain, &r.Injury); err != nil {
+			&r.Stars, &r.Redshirt, &r.Captain, &r.Injury, &r.Departed); err != nil {
 			return nil, err
 		}
 		out = append(out, r)

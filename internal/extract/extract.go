@@ -250,8 +250,9 @@ func (x *extractor) run(snap *Snapshot) error {
 	x.season(snap)
 	x.teams(snap)
 	x.conferences(snap)
-	x.games(snap)
 	x.teamHistory(snap)
+	x.seasonConferences(snap) // before games: game types depend on conferences
+	x.games(snap)
 	x.playerStats(snap)
 	x.entities(snap)
 	x.playerRows(snap)

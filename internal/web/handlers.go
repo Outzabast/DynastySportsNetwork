@@ -1028,7 +1028,13 @@ func (s *Site) teamRoster(r *http.Request, c *store.Ctx) (string, data, error) {
 	if err != nil {
 		return "", nil, err
 	}
-	return "roster", data{"T": t, "Season": season, "Groups": groups, "Count": len(roster), "Depth": depthByPos(depth), "Tab": "roster"}, nil
+	departed := 0
+	for _, p := range roster {
+		if p.Departed != "" {
+			departed++
+		}
+	}
+	return "roster", data{"T": t, "Season": season, "Groups": groups, "Count": len(roster), "Departed": departed, "Depth": depthByPos(depth), "Tab": "roster"}, nil
 }
 
 func set(xs ...string) map[string]bool {
@@ -1194,18 +1200,58 @@ func (s *Site) player(r *http.Request, c *store.Ctx) (string, data, error) {
 	if err != nil {
 		return "", nil, err
 	}
-	tables := careerTables(lines, teams, c)
-	// Game log for the latest season with games.
-	logSeason := c.Season
-	if y := atoi(r.URL.Query().Get("season"), 0); y > 0 {
-		logSeason = y - c.BaseYear
-	}
-	glog, err := s.q.PlayerGameLog(ctx, c, logSeason, id)
+	logSeasons, err := s.q.PlayerLogSeasons(ctx, c, id)
 	if err != nil {
 		return "", nil, err
 	}
-	logTeams, _ := s.q.Teams(ctx, c, logSeason)
-	logTables := gameLogTables(glog, logTeams, c.YearOf(logSeason), bio.TeamID)
+	logged := map[int]bool{}
+	for _, ls := range logSeasons {
+		logged[ls.Season] = true
+	}
+	tables := careerTables(lines, teams, c, func(season int) string {
+		if !logged[season] {
+			return ""
+		}
+		return fmt.Sprintf("/player/%s?season=%d#gamelog", id, c.YearOf(season))
+	})
+	// Game log: the season asked for, else the latest one with games (a
+	// former player has none in the current season).
+	logSeason := -1
+	if len(logSeasons) > 0 {
+		logSeason = logSeasons[0].Season
+	}
+	if y := atoi(r.URL.Query().Get("season"), 0); y > 0 && logged[y-c.BaseYear] {
+		logSeason = y - c.BaseYear
+	}
+	var logTables []RenderedTable
+	var logTabs []LogTab
+	logTeam := teamOr(teams, -1)
+	if logSeason >= 0 {
+		glog, err := s.q.PlayerGameLog(ctx, c, logSeason, id)
+		if err != nil {
+			return "", nil, err
+		}
+		logTeams, err := s.q.Teams(ctx, c, logSeason)
+		if err != nil {
+			return "", nil, err
+		}
+		logTables = gameLogTables(glog, logTeams, c.YearOf(logSeason))
+		for _, ls := range logSeasons {
+			t := teamOr(teams, ls.Team)
+			if ls.Season == logSeason {
+				logTeam = t
+			}
+			logTabs = append(logTabs, LogTab{Year: c.YearOf(ls.Season), Team: t, On: ls.Season == logSeason,
+				URL: fmt.Sprintf("/player/%s?season=%d#gamelog", id, c.YearOf(ls.Season))})
+		}
+	}
+	var noLog []string
+	for _, sn := range lineSeasons(lines) {
+		if !logged[sn] {
+			noLog = append(noLog, fmt.Sprint(c.YearOf(sn)))
+		}
+	}
+	stints := careerStints(lines, teams, c)
 	awards, err := s.q.Awards(ctx, c, id)
 	if err != nil {
 		return "", nil, err
@@ -1216,17 +1262,110 @@ func (s *Site) player(r *http.Request, c *store.Ctx) (string, data, error) {
 	}
 	raw := rawStatTable(lines, c)
 	return "player", data{"P": bio, "Team": teamOr(teams, bio.TeamID), "Tables": tables, "LogTables": logTables, "LogYear": c.YearOf(logSeason),
-		"Awards": awards, "Events": events, "Raw": raw, "Teams": teams}, nil
+		"LogTeam": logTeam, "LogTabs": logTabs, "NoLog": strings.Join(noLog, ", "), "Stints": stints,
+		"Awards": awards, "Transactions": playerTransactions(events, stints, teams, c), "Raw": raw, "Teams": teams}, nil
+}
+
+// LogTab is one season choice above a player's game log.
+type LogTab struct {
+	Year int
+	Team *store.Team
+	On   bool
+	URL  string
+}
+
+// CareerStint is a run of consecutive seasons with one team.
+type CareerStint struct {
+	Team     *store.Team
+	From, To int // calendar years
+}
+
+// Years is "2035" or "2034-2036".
+func (cs CareerStint) Years() string {
+	if cs.From == cs.To {
+		return fmt.Sprint(cs.From)
+	}
+	return fmt.Sprintf("%d-%d", cs.From, cs.To)
+}
+
+// lineSeasons is the seasons a player has stats in, oldest first.
+func lineSeasons(lines []*store.SeasonLine) []int {
+	seen := map[int]bool{}
+	var out []int
+	for _, l := range lines {
+		if !seen[l.Season] {
+			seen[l.Season] = true
+			out = append(out, l.Season)
+		}
+	}
+	sort.Ints(out)
+	return out
+}
+
+// careerStints is the teams a player has played for, in order, from his
+// season stat lines (each line names the team it was earned with).
+func careerStints(lines []*store.SeasonLine, teams map[int]*store.Team, c *store.Ctx) []CareerStint {
+	teamOf := map[int]int{}
+	for _, l := range lines {
+		if l.TeamID >= 0 {
+			teamOf[l.Season] = l.TeamID
+		}
+	}
+	var out []CareerStint
+	for _, sn := range lineSeasons(lines) {
+		id, ok := teamOf[sn]
+		if !ok {
+			continue
+		}
+		year := c.YearOf(sn)
+		if n := len(out); n > 0 && out[n-1].Team.ID == id {
+			out[n-1].To = year
+			continue
+		}
+		out = append(out, CareerStint{Team: teamOr(teams, id), From: year, To: year})
+	}
+	return out
+}
+
+// Transaction is one line of a player's transaction history.
+type Transaction struct {
+	Year int
+	Text string
+}
+
+// playerTransactions is the player's moves, newest first: transfers (from his
+// career stints) and the game's events (position changes, players listed as
+// leaving at season's end).
+func playerTransactions(events []*store.Event, stints []CareerStint, teams map[int]*store.Team, c *store.Ctx) []Transaction {
+	var out []Transaction
+	for i := 1; i < len(stints); i++ {
+		out = append(out, Transaction{Year: stints[i].From,
+			Text: fmt.Sprintf("Transferred from %s to %s", stints[i-1].Team.Long, stints[i].Team.Long)})
+	}
+	for _, e := range events {
+		out = append(out, Transaction{Year: c.YearOf(e.Season), Text: eventText(e, teams)})
+	}
+	// Newest first; within a year, the transfer (a later step) above the
+	// end-of-season listing that led to it.
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Year > out[j].Year })
+	return out
 }
 
 // careerTables is a player's season-by-season stats, one table per category
-// with a career row.
-func careerTables(lines []*store.SeasonLine, teams map[int]*store.Team, c *store.Ctx) []RenderedTable {
+// with a career row. logURL, when set, links a season to its game log
+// ("" when that season has none); otherwise the season links to the team.
+func careerTables(lines []*store.SeasonLine, teams map[int]*store.Team, c *store.Ctx, logURL func(season int) string) []RenderedTable {
 	var tables []RenderedTable
 	for _, tb := range seasonTables {
 		rt := renderSeasonTable(tb, lines, func(l *store.SeasonLine) Row {
 			t := teamOr(teams, l.TeamID)
-			return Row{Label: fmt.Sprint(c.YearOf(l.Season)), Sub: t.Short, Href: fmt.Sprintf("/team/%d?season=%d", l.TeamID, c.YearOf(l.Season))}
+			href := fmt.Sprintf("/team/%d?season=%d", l.TeamID, c.YearOf(l.Season))
+			if logURL != nil {
+				if u := logURL(l.Season); u != "" {
+					href = u
+				}
+			}
+			return Row{Label: fmt.Sprint(c.YearOf(l.Season)), Sub: t.Short, Href: href}
 		}, false)
 		if len(rt.Rows) == 0 {
 			continue
@@ -1248,8 +1387,13 @@ func careerTables(lines []*store.SeasonLine, teams map[int]*store.Team, c *store
 	return tables
 }
 
-// gameLogTables renders a player's game log, one table per stat table with data.
-func gameLogTables(logs []*store.GameLog, teams map[int]*store.Team, year, team int) []RenderedTable {
+// gameLogTables renders a player's game log, one table per stat table with
+// data. Each game is read from the side of the team he played for in it.
+func gameLogTables(logs []*store.GameLog, teams map[int]*store.Team, year int) []RenderedTable {
+	teamIn := map[int]int{}
+	for _, l := range logs {
+		teamIn[l.Game.Row] = l.Team
+	}
 	var out []RenderedTable
 	for _, tb := range boxTables {
 		rt := RenderedTable{ID: tb.ID, Name: tb.Name, Headers: tb.Cols}
@@ -1272,6 +1416,7 @@ func gameLogTables(logs []*store.GameLog, teams map[int]*store.Team, year, team 
 				continue
 			}
 			total.Add(st)
+			team := teamIn[g.Row]
 			opp, at := teamOr(teams, g.Home), "@ "
 			if g.Home == team {
 				opp, at = teamOr(teams, g.Away), "vs "

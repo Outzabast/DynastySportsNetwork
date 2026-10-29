@@ -314,17 +314,17 @@ func (s *Site) exportPlayer(r *http.Request, c *store.Ctx) (*xdoc, error) {
 		}
 		profile.Tables = append(profile.Tables, xt)
 	}
-	if len(events) > 0 {
+	if tx := playerTransactions(events, careerStints(lines, teams, c), teams, c); len(tx) > 0 {
 		xt := &xtable{Title: "Transactions", Headers: []string{"Season", "Event"}}
-		for _, e := range events {
-			xt.Rows = append(xt.Rows, []string{fmt.Sprint(c.YearOf(e.Season)), eventText(e)})
+		for _, t := range tx {
+			xt.Rows = append(xt.Rows, []string{fmt.Sprint(t.Year), t.Text})
 		}
 		profile.Tables = append(profile.Tables, xt)
 	}
 	d.Sheets = append(d.Sheets, profile)
 
 	career := &xsheet{Name: "Career Stats", Heading: "Career Stats by Season"}
-	for _, rt := range careerTables(lines, teams, c) {
+	for _, rt := range careerTables(lines, teams, c, nil) {
 		career.Tables = append(career.Tables, fromRendered(rt, rt.Name, "Season", "Team"))
 	}
 	d.Sheets = append(d.Sheets, career)
@@ -642,7 +642,7 @@ func playerMeta(b *store.Bio, team *store.Team) []xkv {
 		m = append(m, xkv{"Weight", fmt.Sprintf("%d lbs", b.Weight)})
 	}
 	if b.HomeTown != "" {
-		m = append(m, xkv{"Hometown", b.HomeTown + ", " + b.HomeState})
+		m = append(m, xkv{"Hometown", b.HomeTown + ", " + prettyEnum(b.HomeState)})
 	}
 	if b.Stars > 0 {
 		m = append(m, xkv{"Recruiting", fmt.Sprintf("%d-star recruit", b.Stars)})
@@ -656,12 +656,30 @@ func playerMeta(b *store.Bio, team *store.Team) []xkv {
 	return m
 }
 
-func eventText(e *store.Event) string {
+// eventText is a player event in plain words. "leaving" comes from the
+// game's end-of-season list of players expected to leave: an intent, not a
+// completed move (a player can still be talked into staying).
+func eventText(e *store.Event, teams map[int]*store.Team) string {
 	switch e.Kind {
 	case "position_change":
 		return fmt.Sprintf("Moved from %v to %v", e.Detail["from"], e.Detail["to"])
 	case "leaving":
-		return "Leaving program: " + prettyEnum(strings.TrimPrefix(fmt.Sprint(e.Detail["type"]), "Transfer_"))
+		from := "" // " from Charlotte", when the event names the team
+		if id, ok := e.Detail["team"].(float64); ok && int(id) >= 0 {
+			from = " from " + teamOr(teams, int(id)).Long
+		}
+		kind := fmt.Sprint(e.Detail["type"])
+		switch {
+		case kind == "Graduation":
+			return "Set to graduate" + from
+		case strings.HasPrefix(kind, "Transfer_"):
+			reason := strings.ToLower(prettyEnum(strings.TrimPrefix(kind, "Transfer_")))
+			reason = strings.Replace(reason, "contenter", "contender", 1) // the game's spelling
+			return fmt.Sprintf("Announced plans to transfer%s (reason: %s)", from, reason)
+		case strings.HasPrefix(kind, "EarlyNFL_"):
+			return fmt.Sprintf("Announced plans to enter the NFL Draft (projected round %s)", strings.TrimPrefix(kind, "EarlyNFL_"))
+		}
+		return "Expected to leave the program: " + prettyEnum(kind)
 	}
 	return prettyEnum(e.Kind)
 }

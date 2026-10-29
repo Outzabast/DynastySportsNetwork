@@ -486,3 +486,29 @@ ALTER TABLE article ADD COLUMN IF NOT EXISTS kind text NOT NULL DEFAULT '';
 -- are deleted from data/archive to save space. The snapshot row stays; this
 -- marks that its archive file is gone, so rebuild and repair tools skip it.
 ALTER TABLE snapshot ADD COLUMN IF NOT EXISTS archive_pruned_at timestamptz;
+
+-- Everyone on a team's roster at some point in a season. player_season keeps
+-- only the latest bio, and the last save of a season is from the offseason,
+-- after graduates, draftees and transfers have left; this keeps them on the
+-- season's roster. Written from in-season saves only (offseason moves belong
+-- to the next season). The bio columns are as of the player's last in-season
+-- save with the team: offseason saves advance class years, so the season's
+-- player_season bio would show next year's class.
+CREATE TABLE IF NOT EXISTS roster_spot (
+    branch_id      int NOT NULL,
+    season_index   int NOT NULL,
+    team_id        int NOT NULL,
+    person_id      uuid NOT NULL,
+    first_snapshot int NOT NULL,
+    last_snapshot  int NOT NULL,
+    position       text NOT NULL,
+    jersey         int NOT NULL,
+    school_year    text NOT NULL,
+    redshirt       text NOT NULL,
+    height         int NOT NULL,
+    weight         int NOT NULL,
+    star_rating    int NOT NULL,
+    portrait       text NOT NULL,
+    is_captain     boolean NOT NULL,
+    PRIMARY KEY (branch_id, season_index, team_id, person_id)
+);

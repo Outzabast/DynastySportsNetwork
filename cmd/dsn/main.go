@@ -16,7 +16,9 @@ commands:
   extract   print a summary of what a save contains (debug)
   backfill-team-stats  refill empty team season totals from the archive
   repair-fcs-lines     move FCS players' game lines off the FBS team (from the archive)
-  prune-archive        delete superseded saves (older saves of the same week) from the archive`)
+  prune-archive        delete superseded saves (older saves of the same week) from the archive
+  backfill-rosters     record past seasons' full rosters from the archive
+  repair-season-conferences  fix seasons recorded with next season's conferences`)
 }
 
 func main() {
@@ -40,6 +42,10 @@ func main() {
 		err = runRepairFCSLines(args)
 	case "prune-archive":
 		err = runPruneArchive(args)
+	case "backfill-rosters":
+		err = runBackfillRosters(args)
+	case "repair-season-conferences":
+		err = runRepairSeasonConferences(args)
 	case "extract":
 		err = runExtract(args)
 	default:

@@ -19,9 +19,10 @@ import (
 
 // MCP: a Model Context Protocol server (Streamable HTTP transport, JSON
 // responses, no sessions) at /mcp, so AI agents on this machine can browse
-// the site the way the user does. It is read-only: every tool renders the
-// site's own GET pages, so agents see exactly what the pages show and
-// nothing more (AGENTS.md rule 1). Only loopback clients are served.
+// the site the way the user does. The read tools render the site's own GET
+// pages, so agents see exactly what the pages show and nothing more
+// (AGENTS.md rule 1); the only writes are news articles (mcparticles.go).
+// Only loopback clients are served, or Access-authenticated ones when hosted.
 //
 //	claude mcp add --transport http dsn http://localhost:8080/mcp
 
@@ -29,7 +30,7 @@ const mcpPath = "/mcp"
 
 var mcpVersions = []string{"2025-06-18", "2025-03-26", "2024-11-05"}
 
-const mcpInstructions = `Dynasty Sports Network: an ESPN-style site for one EA Sports College Football 27 dynasty. Every team, player, coach and game comes from the user's dynasty save, not real life. Start with site_overview (current week, seasons, team ids, page guide), use search to find a player's or team's page, then read_page any path. Pages link to each other with site paths (player pages are /player/<uuid>), and each page lists the query parameters its filters accept (season is a calendar year). Exports (/player/<id>/export, /game/<season>/<row>/export, /team/<id>/export/season, /team/<id>/export/stats, /stats/teams/export) give the full stat tables of those pages.`
+const mcpInstructions = `Dynasty Sports Network: an ESPN-style site for one EA Sports College Football 27 dynasty. Every team, player, coach and game comes from the user's dynasty save, not real life. Start with site_overview (current week, seasons, team ids, page guide), use search to find a player's or team's page, then read_page any path. Pages link to each other with site paths (player pages are /player/<uuid>), and each page lists the query parameters its filters accept (season is a calendar year). Exports (/player/<id>/export, /game/<season>/<row>/export, /team/<id>/export/season, /team/<id>/export/stats, /stats/teams/export) give the full stat tables of those pages. To write for the site, use save_article (drafts unless publish is true) and get_article to revise a story.`
 
 const pageGuide = `Pages (read_page paths; season=<year> works on most):
 - /  front page: headlines, top games, standings snapshot
@@ -220,6 +221,10 @@ func (s *Site) mcpCall(r *http.Request, req rpcRequest) (any, *rpcError) {
 			text, err = s.mcpSearch(r, args)
 		case "read_page":
 			text, err = s.mcpReadPage(r, args)
+		case "get_article":
+			text, err = s.mcpGetArticle(r, p.Arguments)
+		case "save_article":
+			text, err = s.mcpSaveArticle(r, p.Arguments)
 		default:
 			return nil, &rpcError{-32602, "unknown tool " + p.Name}
 		}

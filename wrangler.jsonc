@@ -15,7 +15,9 @@
 	"vars": {
 		// Access app "Dynasty Sports Network" (id 44d97c94-c2f0-4e76-894d-62ef0fac0a04)
 		"ACCESS_TEAM_DOMAIN": "sweet-darkness-3d5b.cloudflareaccess.com",
-		"ACCESS_AUD": "7af5a274d085b4003f7fed3e70a7df40347e89d0eb7a1b7038f9b8f941bfb100"
+		"ACCESS_AUD": "7af5a274d085b4003f7fed3e70a7df40347e89d0eb7a1b7038f9b8f941bfb100",
+		// Access app "DSN MCP (agents)" on /mcp only (id c90664e8-a134-408b-acd7-e859b32d47ec)
+		"ACCESS_MCP_AUD": "aa486c4926ec1dab123ca4375490587d0475360d08908e647931acd4aff89595"
 	},
 	"r2_buckets": [{ "binding": "MEDIA", "bucket_name": "dsn-media" }],
 	"containers": [

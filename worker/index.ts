@@ -17,7 +17,8 @@ interface Env {
 	MEDIA: R2Bucket;
 	DSN_DB: string; // secret: hosted Postgres URL
 	ACCESS_TEAM_DOMAIN: string; // e.g. yourteam.cloudflareaccess.com
-	ACCESS_AUD: string; // the Access application's AUD tag
+	ACCESS_AUD: string; // the site's Access application AUD tag
+	ACCESS_MCP_AUD: string; // AUD of the /mcp-only Access app agents sign in to
 }
 
 const mediaBridge = async (request: Request, env: Env): Promise<Response> => {
@@ -52,6 +53,8 @@ Site.outboundByHost = { "media.r2": mediaBridge };
 
 let jwks: ReturnType<typeof createRemoteJWKSet> | undefined;
 
+// accessAllowed checks the Access JWT. A token for the site app opens every
+// path; a token for the /mcp app (agents' service token) opens only /mcp.
 async function accessAllowed(request: Request, env: Env): Promise<boolean> {
 	const token = request.headers.get("cf-access-jwt-assertion");
 	if (!token || !env.ACCESS_TEAM_DOMAIN || !env.ACCESS_AUD) {
@@ -59,9 +62,11 @@ async function accessAllowed(request: Request, env: Env): Promise<boolean> {
 	}
 	const issuer = `https://${env.ACCESS_TEAM_DOMAIN}`;
 	jwks ??= createRemoteJWKSet(new URL(`${issuer}/cdn-cgi/access/certs`));
+	const audiences = [env.ACCESS_AUD, env.ACCESS_MCP_AUD].filter(Boolean);
 	try {
-		await jwtVerify(token, jwks, { issuer, audience: env.ACCESS_AUD });
-		return true;
+		const { payload } = await jwtVerify(token, jwks, { issuer, audience: audiences });
+		const aud = Array.isArray(payload.aud) ? payload.aud : [payload.aud];
+		return aud.includes(env.ACCESS_AUD) || new URL(request.url).pathname === "/mcp";
 	} catch {
 		return false;
 	}

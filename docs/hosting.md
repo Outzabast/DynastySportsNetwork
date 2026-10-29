@@ -34,7 +34,10 @@ Browser / agent ─► Access ─► Worker ─┬─► container: dsn serve -h
 
 Done 2026-10-29: bucket `dsn-media`, Access team
 `sweet-darkness-3d5b.cloudflareaccess.com`, app "Dynasty Sports Network"
-with policy "Allow owner", one-time PIN login.
+with policy "Allow owner", one-time PIN login. Agents use a second app,
+"DSN MCP (agents)", on `dynasty.williamfowle.com/mcp` that admits only the
+agents' service token; the Worker lets that app's tokens reach `/mcp` and
+nothing else.
 
 1. Create the bucket: `npx wrangler r2 bucket create dsn-media`.
 2. GitHub repo secrets:

@@ -115,6 +115,23 @@ func (q *Queries) TeamHistory(ctx context.Context, c *Ctx, team int) ([]*History
 	if err := cr.Err(); err != nil {
 		return nil, err
 	}
+	cr.Close()
+	// A record that counts a hidden game gives way to the visible one.
+	if cur := by[c.YearOf(c.Season)]; cur != nil && cur.Captured {
+		h, err := q.hidden(ctx, c)
+		if err != nil {
+			return nil, err
+		}
+		if h.playedBy(c.Season, team) {
+			teams, err := q.Teams(ctx, c, c.Season)
+			if err != nil {
+				return nil, err
+			}
+			if t := teams[team]; t != nil {
+				cur.W, cur.L, cur.CW, cur.CL = t.W, t.L, t.CW, t.CL
+			}
+		}
+	}
 	out := make([]*HistoryYear, 0, len(by))
 	for _, h := range by {
 		out = append(out, h)
@@ -274,7 +291,7 @@ func (q *Queries) GamesForTeamSeasons(ctx context.Context, c *Ctx, team int, sea
 	if err != nil {
 		return nil, err
 	}
-	return scanGames(rows)
+	return q.masked(ctx, c)(scanGames(rows))
 }
 
 // TeamSeason names one team in one season.
@@ -299,7 +316,7 @@ func (q *Queries) GamesForTeamSeasonList(ctx context.Context, c *Ctx, list []Tea
 	if err != nil {
 		return nil, err
 	}
-	gs, err := scanGames(rows)
+	gs, err := q.masked(ctx, c)(scanGames(rows))
 	if err != nil {
 		return nil, err
 	}

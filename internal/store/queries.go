@@ -302,6 +302,11 @@ func (q *Queries) Teams(ctx context.Context, c *Ctx, season int) (map[int]*Team,
 			r.apply(&t.W, &t.L, &t.CW, &t.CL, &t.Streak)
 		}
 	}
+	h, err := q.hidden(ctx, c)
+	if err != nil {
+		return nil, err
+	}
+	h.adjustTeams(season, m, recs)
 	q.mu.Lock()
 	q.teams[[2]int{c.Branch, season}] = m
 	q.mu.Unlock()
@@ -445,7 +450,19 @@ func (q *Queries) weeks(ctx context.Context, c *Ctx, season int) ([]WeekKey, err
 		rows.Scan(&w.WeekType, &w.Week, &w.Games, &w.Played)
 		out = append(out, w)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	h, err := q.hidden(ctx, c)
+	if err != nil {
+		return nil, err
+	}
+	for i, w := range out {
+		if h.any(season) && w.WeekType == h.weekType && w.Week == h.week {
+			out[i].Played -= len(h.games)
+		}
+	}
+	return out, nil
 }
 
 // GamesForWeeks returns several scoreboard weeks in one query, each in
@@ -491,7 +508,7 @@ func (q *Queries) gamesForWeeks(ctx context.Context, c *Ctx, season int, weeks [
 	if err != nil {
 		return nil, err
 	}
-	gs, err := scanGames(rows)
+	gs, err := q.masked(ctx, c)(scanGames(rows))
 	if err != nil {
 		return nil, err
 	}
@@ -509,7 +526,7 @@ func (q *Queries) GamesForWeek(ctx context.Context, c *Ctx, season int, weekType
 	if err != nil {
 		return nil, err
 	}
-	return scanGames(rows)
+	return q.masked(ctx, c)(scanGames(rows))
 }
 
 // TeamGames returns a team's schedule for a season.
@@ -520,7 +537,7 @@ func (q *Queries) TeamGames(ctx context.Context, c *Ctx, season, team int) ([]*G
 		if err != nil {
 			return nil, err
 		}
-		return scanGames(rows)
+		return q.masked(ctx, c)(scanGames(rows))
 	})
 	if err != nil {
 		return nil, err
@@ -548,7 +565,11 @@ func (q *Queries) SeasonPoints(ctx context.Context, c *Ctx, season int) (map[int
 }
 
 func (q *Queries) seasonPoints(ctx context.Context, c *Ctx, season int) (map[int]TeamPoints, error) {
-	rows, err := q.s.DB.Query(ctx, `SELECT home_team, away_team, home_score, away_score FROM game
+	hidden, err := q.hidden(ctx, c)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := q.s.DB.Query(ctx, `SELECT game_row, home_team, away_team, home_score, away_score FROM game
 		WHERE branch_id = $1 AND season_index = $2 AND played`, c.Branch, season)
 	if err != nil {
 		return nil, err
@@ -556,9 +577,12 @@ func (q *Queries) seasonPoints(ctx context.Context, c *Ctx, season int) (map[int
 	defer rows.Close()
 	out := map[int]TeamPoints{}
 	for rows.Next() {
-		var h, a, hs, as int
-		if err := rows.Scan(&h, &a, &hs, &as); err != nil {
+		var row, h, a, hs, as int
+		if err := rows.Scan(&row, &h, &a, &hs, &as); err != nil {
 			return nil, err
+		}
+		if hidden.has(season, row) {
+			continue
 		}
 		for _, side := range [][3]int{{h, hs, as}, {a, as, hs}} {
 			tp := out[side[0]]
@@ -592,7 +616,11 @@ func (q *Queries) SeasonResults(ctx context.Context, c *Ctx, season int) ([]Resu
 }
 
 func (q *Queries) seasonResults(ctx context.Context, c *Ctx, season int) ([]Result, error) {
-	rows, err := q.s.DB.Query(ctx, `SELECT week, home_team, away_team, home_score, away_score, played, game_type, bowl_name FROM game
+	h, err := q.hidden(ctx, c)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := q.s.DB.Query(ctx, `SELECT game_row, week, home_team, away_team, home_score, away_score, played, game_type, bowl_name FROM game
 		WHERE branch_id = $1 AND season_index = $2 ORDER BY week, game_row`, c.Branch, season)
 	if err != nil {
 		return nil, err
@@ -602,8 +630,11 @@ func (q *Queries) seasonResults(ctx context.Context, c *Ctx, season int) ([]Resu
 	for rows.Next() {
 		var r Result
 		var g Game
-		if err := rows.Scan(&r.Week, &r.Home, &r.Away, &r.HomeScore, &r.AwayScore, &r.Played, &g.GameType, &g.BowlName); err != nil {
+		if err := rows.Scan(&g.Row, &r.Week, &r.Home, &r.Away, &r.HomeScore, &r.AwayScore, &r.Played, &g.GameType, &g.BowlName); err != nil {
 			return nil, err
+		}
+		if h.has(season, g.Row) {
+			r.HomeScore, r.AwayScore, r.Played = 0, 0, false
 		}
 		switch g.Kind() {
 		case "conf_championship", "bowl", "playoff", "national_championship":
@@ -622,7 +653,7 @@ func (q *Queries) Game(ctx context.Context, c *Ctx, season, row int) (*Game, err
 	if err != nil {
 		return nil, err
 	}
-	gs, err := scanGames(rows)
+	gs, err := q.masked(ctx, c)(scanGames(rows))
 	if err != nil || len(gs) == 0 {
 		return nil, err
 	}
@@ -691,6 +722,11 @@ func (q *Queries) GamesLeaderLines(ctx context.Context, c *Ctx, season int, game
 
 func (q *Queries) gamesLines(ctx context.Context, c *Ctx, season int, games []int, statsExpr, where string) (map[int][]*Line, error) {
 	out := map[int][]*Line{}
+	h, err := q.hidden(ctx, c)
+	if err != nil {
+		return nil, err
+	}
+	games = h.visibleRows(season, games)
 	if len(games) == 0 {
 		return out, nil
 	}
@@ -758,6 +794,9 @@ type Participant struct {
 
 // ScoringPlays returns the stored scoring summary for a game.
 func (q *Queries) ScoringPlays(ctx context.Context, c *Ctx, season, row int) ([]*ScoringPlay, error) {
+	if h, err := q.hidden(ctx, c); err != nil || h.has(season, row) {
+		return nil, err
+	}
 	// The plays and every participant's bio go in one batch (one round trip).
 	b := &pgx.Batch{}
 	b.Queue(`SELECT seq, quarter, clock_sec, home_score, away_score, home_prev, away_prev, conversion, scoring_team, participants
@@ -920,8 +959,28 @@ func (q *Queries) seasonLines(ctx context.Context, c *Ctx, season int, person uu
 		idx[k] = &ll
 		out = append(out, &ll)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+	h, err := q.hidden(ctx, c)
+	if err != nil {
+		return nil, err
+	}
+	if h.any(season) && len(h.included) > 0 {
+		// The save's totals already count a hidden game: take its lines out.
+		hl, err := q.hiddenLines(ctx, c, h, person, team)
+		if err != nil {
+			return nil, err
+		}
+		for _, l := range hl {
+			if e := idx[l.Player.ID.String()+"|"+itoa(l.Season)+"|"+itoa(l.TeamID)+"|"+l.Group]; e != nil {
+				e.Stats.sub(l.Stats)
+			}
+		}
+	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Season < out[j].Season })
-	return out, rows.Err()
+	return out, nil
 }
 
 func nullUUID(id uuid.UUID) any {
@@ -1000,6 +1059,10 @@ func (q *Queries) PlayerGameLog(ctx context.Context, c *Ctx, season int, person 
 		acc[k].Add(st)
 	}
 	rows.Close()
+	h, err := q.hidden(ctx, c)
+	if err != nil {
+		return nil, err
+	}
 	gameRows := map[int]*Game{}
 	if len(keys) > 0 {
 		list := []int32{}
@@ -1020,7 +1083,7 @@ func (q *Queries) PlayerGameLog(ctx context.Context, c *Ctx, season int, person 
 	}
 	var out []*GameLog
 	for _, k := range keys {
-		if g := gameRows[k.row]; g != nil {
+		if g := gameRows[k.row]; g != nil && !h.has(season, k.row) {
 			out = append(out, &GameLog{Game: g, Team: team[k.row], Group: k.group, Stats: acc[k]})
 		}
 	}

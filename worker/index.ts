@@ -40,13 +40,15 @@ export class Site extends Container<Env> {
 	defaultPort = 8080;
 	sleepAfter = "15m";
 
-	static outboundByHost = { "media.r2": mediaBridge };
-
 	constructor(ctx: DurableObjectState, env: Env) {
 		super(ctx, env);
 		this.envVars = { DSN_DB: env.DSN_DB };
 	}
 }
+
+// Assigned, not declared as a static class field: Container's static setter
+// registers handlers by class name, and a class field would bypass it.
+Site.outboundByHost = { "media.r2": mediaBridge };
 
 let jwks: ReturnType<typeof createRemoteJWKSet> | undefined;
 

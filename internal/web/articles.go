@@ -352,7 +352,7 @@ func (s *Site) upload(w http.ResponseWriter, r *http.Request, c *store.Ctx) (str
 	base := store.Slugify(strings.TrimSuffix(hdr.Filename, filepath.Ext(hdr.Filename)))
 	name := fmt.Sprintf("%s-%s-%s%s", time.Now().Format("2006-01-02"), base, hex.EncodeToString(suffix), ext)
 	if s.opt.MediaURL != "" {
-		if err := putMedia(r.Context(), s.opt.MediaURL, "articles/"+name, http.DetectContentType(head[:n]), file); err != nil {
+		if err := putMedia(r.Context(), s.opt.MediaURL, "articles/"+name, http.DetectContentType(head[:n]), file, hdr.Size); err != nil {
 			return "", err
 		}
 		w.Header().Set("Content-Type", "application/json")

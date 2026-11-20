@@ -29,9 +29,16 @@ const mediaBridge = async (request: Request, env: Env): Promise<Response> => {
 	}
 	// Only article uploads are written from the site; game media comes from git.
 	if (request.method === "PUT" && key.startsWith("articles/") && !key.includes("..")) {
-		await env.MEDIA.put(key, request.body, {
-			httpMetadata: { contentType: request.headers.get("content-type") ?? undefined },
-		});
+		// Buffer the body: R2 rejects a stream of unknown length, and uploads are
+		// capped at 20 MB by the site, so holding one in memory is fine.
+		try {
+			await env.MEDIA.put(key, await request.arrayBuffer(), {
+				httpMetadata: { contentType: request.headers.get("content-type") ?? undefined },
+			});
+		} catch (err) {
+			console.error("media put failed", key, err);
+			return new Response(`r2 put failed: ${err instanceof Error ? err.message : String(err)}`, { status: 500 });
+		}
 		return new Response(null, { status: 201 });
 	}
 	return new Response("forbidden", { status: 403 });

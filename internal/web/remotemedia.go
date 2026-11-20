@@ -44,12 +44,15 @@ func fetchMediaManifest(ctx context.Context, base string) ([]string, error) {
 	return paths, sc.Err()
 }
 
-// putMedia stores one file in the bucket at rel ("articles/x.png").
-func putMedia(ctx context.Context, base, rel, contentType string, body io.Reader) error {
+// putMedia stores one file in the bucket at rel ("articles/x.png"). size must
+// be the exact body length: R2 rejects streamed (chunked) bodies, so the
+// request has to carry a Content-Length.
+func putMedia(ctx context.Context, base, rel, contentType string, body io.Reader, size int64) error {
 	req, err := http.NewRequestWithContext(ctx, "PUT", strings.TrimRight(base, "/")+"/"+rel, body)
 	if err != nil {
 		return err
 	}
+	req.ContentLength = size
 	req.Header.Set("Content-Type", contentType)
 	resp, err := mediaClient.Do(req)
 	if err != nil {

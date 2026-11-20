@@ -109,29 +109,53 @@ func newsCard(title, all string, stories []StoryCard) *NewsCard {
 	return &NewsCard{Title: title, AllURL: all, Stories: stories}
 }
 
-// TagChip is one tagged player or coach in the editor and on a story.
+// TagChip is one team, player or coach tag in the editor and on a story.
 type TagChip struct {
-	Kind  string `json:"kind"`  // "person" or "coach" (the form field name)
-	Value string `json:"value"` // person UUID or coach key
+	Kind  string `json:"kind"`  // "team", "person" or "coach" (the form field name)
+	Value string `json:"value"` // team id, person UUID or coach key
 	Name  string `json:"name"`
 	Sub   string `json:"sub"` // "QB · Texas State"
 	URL   string `json:"url"`
+	pos   string
+	team  int
+}
+
+// chipSub is the line under a tag's name: position (or role) and team.
+func chipSub(pos string, t *store.Team) string {
+	if t == nil {
+		return pos
+	}
+	if pos == "" {
+		return t.Name
+	}
+	return pos + " · " + t.Name
 }
 
 func playerChip(p store.PlayerRef, teams map[int]*store.Team) TagChip {
-	sub := p.Position
-	if t := teams[p.TeamID]; t != nil {
-		sub = strings.TrimPrefix(sub+" · "+t.Name, " · ")
+	return TagChip{Kind: "person", Value: p.ID.String(), Name: p.Name(), Sub: chipSub(p.Position, teams[p.TeamID]),
+		URL: "/player/" + p.ID.String(), pos: p.Position, team: p.TeamID}
+}
+
+// coachRoleShort is a coach's role as a tag shows it: HC, OC, DC.
+func coachRoleShort(p string) string {
+	switch p {
+	case "HeadCoach":
+		return "HC"
+	case "OffensiveCoordinator":
+		return "OC"
+	case "DefensiveCoordinator":
+		return "DC"
 	}
-	return TagChip{Kind: "person", Value: p.ID.String(), Name: p.Name(), Sub: sub, URL: "/player/" + p.ID.String()}
+	return positionLabel(p)
 }
 
 func coachChip(k store.CoachRef, teams map[int]*store.Team) TagChip {
-	sub := positionLabel(k.Position)
-	if t := teams[k.TeamID]; t != nil {
-		sub = strings.TrimPrefix(sub+" · "+t.Name, " · ")
-	}
-	return TagChip{Kind: "coach", Value: k.Key, Name: k.Name(), Sub: sub, URL: coachURL(k.Key)}
+	pos := coachRoleShort(k.Position)
+	return TagChip{Kind: "coach", Value: k.Key, Name: k.Name(), Sub: chipSub(pos, teams[k.TeamID]), URL: coachURL(k.Key), pos: pos, team: k.TeamID}
+}
+
+func teamChip(t *store.Team) TagChip {
+	return TagChip{Kind: "team", Value: strconv.Itoa(t.ID), Name: t.Name, Sub: t.Conference, URL: fmt.Sprintf("/team/%d", t.ID)}
 }
 
 // tagChips loads the chips for an article's player and coach tags.
@@ -306,19 +330,26 @@ func (s *Site) editor(r *http.Request, c *store.Ctx) (string, data, error) {
 		}
 	}
 	sort.Slice(list, func(i, j int) bool { return list[i].Name < list[j].Name })
-	tagged := map[int]bool{}
-	for _, id := range a.TeamIDs {
-		tagged[id] = true
+	all := make([]TagChip, len(list))
+	for i, t := range list {
+		all[i] = teamChip(t)
 	}
 	gameRef := ""
 	if a.HasGame() {
 		gameRef = fmt.Sprintf("%d/%d", c.YearOf(*a.Season), *a.GameRow)
 	}
-	chips, err := s.tagChips(ctx, c, teams, a)
+	var chips []TagChip
+	for _, id := range a.TeamIDs {
+		if t := teams[id]; t != nil {
+			chips = append(chips, teamChip(t))
+		}
+	}
+	people, err := s.tagChips(ctx, c, teams, a)
 	if err != nil {
 		return "", nil, err
 	}
-	return "editor", data{"A": a, "Teams": list, "Tagged": tagged, "Chips": chips, "GameRef": gameRef, "Error": r.URL.Query().Get("error")}, nil
+	chips = append(chips, people...)
+	return "editor", data{"A": a, "TeamChips": all, "Chips": chips, "GameRef": gameRef, "Error": r.URL.Query().Get("error")}, nil
 }
 
 // parseGameRef reads "2034/865" or a pasted box score URL ending in it.
@@ -442,9 +473,13 @@ func (s *Site) deleteStory(w http.ResponseWriter, r *http.Request, c *store.Ctx)
 	return "/news", nil
 }
 
-// tagSearch suggests players and coaches for the editor's tag picker:
-// GET /write/people?q=smith -> [{kind, value, name, sub, url}].
-func (s *Site) tagSearch(w http.ResponseWriter, r *http.Request) {
+// tagPageSize is how many players or coaches the tag picker shows at once.
+const tagPageSize = 20
+
+// tagBrowse pages through players or coaches for the editor's tag picker:
+// GET /write/people?kind=person|coach&q=baylor&page=2 ->
+// {items: [{kind, value, name, sub, url}], total, page, pages}.
+func (s *Site) tagBrowse(w http.ResponseWriter, r *http.Request) {
 	if !s.canEdit(r) {
 		http.NotFound(w, r)
 		return
@@ -455,33 +490,42 @@ func (s *Site) tagSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	term := strings.TrimSpace(r.URL.Query().Get("q"))
-	out := []TagChip{}
-	if len(term) >= 2 {
-		var teams map[int]*store.Team
-		var people []store.PlayerRef
-		var coaches []store.CoachRef
-		err := parallel(
-			func() (err error) { teams, err = s.q.Teams(ctx, c, c.Season); return },
-			func() (err error) { people, err = s.q.SearchPeople(ctx, c, term); return },
-			func() (err error) { coaches, err = s.q.SearchCoaches(ctx, c, term, 5); return },
-		)
-		if err != nil {
-			s.fail(w, err)
-			return
-		}
-		for i, p := range people {
-			if i == 10 {
-				break
+	qs := r.URL.Query()
+	filter := strings.TrimSpace(qs.Get("q"))
+	page := max(atoi(qs.Get("page"), 1), 1)
+	pg := store.Page{Offset: (page - 1) * tagPageSize, Limit: tagPageSize}
+	var teams map[int]*store.Team
+	items := []TagChip{}
+	total := 0
+	err = parallel(
+		func() (err error) { teams, err = s.q.Teams(ctx, c, c.Season); return },
+		func() error {
+			if qs.Get("kind") == "coach" {
+				list, n, err := s.q.BrowseCoaches(ctx, c, filter, pg)
+				total = n
+				for _, k := range list {
+					items = append(items, coachChip(k, nil))
+				}
+				return err
 			}
-			out = append(out, playerChip(p, teams))
-		}
-		for _, k := range coaches {
-			out = append(out, coachChip(k, teams))
-		}
+			list, n, err := s.q.BrowsePeople(ctx, c, filter, pg)
+			total = n
+			for _, p := range list {
+				items = append(items, playerChip(p, nil))
+			}
+			return err
+		},
+	)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	// Team names are filled in once both loads are done.
+	for i := range items {
+		items[i].Sub = chipSub(items[i].pos, teams[items[i].team])
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(out)
+	json.NewEncoder(w).Encode(map[string]any{"items": items, "total": total, "page": page, "pages": max((total+tagPageSize-1)/tagPageSize, 1)})
 }
 
 // preview renders Markdown for the editor's preview pane.

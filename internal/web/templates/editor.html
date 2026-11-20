@@ -1,6 +1,6 @@
 {{define "title"}}{{if .A.ID}}Edit Story{{else}}Write a Story{{end}}{{end}}
 {{define "content"}}
-{{$a := .A}}{{$tagged := .Tagged}}
+{{$a := .A}}
 <h1 class="page-title">{{if $a.ID}}Edit Story{{else}}Write a Story{{end}}</h1>
 {{with .Error}}<div class="card card-b loss">{{.}}</div>{{end}}
 <form class="editor" method="post" action="{{if $a.ID}}/story/{{$a.ID}}/edit{{else}}/write{{end}}" id="story-form">
@@ -39,23 +39,24 @@
         <label>Story type<select name="kind"><option value="preview" {{if $a.IsPreview}}selected{{end}}>Preview</option><option value="recap" {{if not $a.IsPreview}}selected{{end}}>Recap</option></select></label>
         <p class="muted small">Game stories show the score strip above the story and appear on the game's page. Previews lead the matchup page before kickoff.</p>
       </div>
-      <div class="card card-b">
-        <h3 class="ed-h">Teams</h3>
-        <select name="team" multiple size="12" class="ed-teams">
-          {{range .Teams}}<option value="{{.ID}}" {{if index $tagged .ID}}selected{{end}}>{{.Name}}</option>{{end}}
-        </select>
-        <p class="muted small">Ctrl-click to pick several. Tagged stories appear on team pages.</p>
-      </div>
-      <div class="card card-b">
-        <h3 class="ed-h">Players &amp; Coaches</h3>
-        <div class="ed-tags" id="tag-chips">
-          {{range .Chips}}<span class="ed-chip"><input type="hidden" name="{{.Kind}}" value="{{.Value}}">{{if eq .Kind "coach"}}<span class="muted">Coach</span> {{end}}<b>{{.Name}}</b>{{with .Sub}} <span class="muted">{{.}}</span>{{end}}<button type="button" title="Remove" aria-label="Remove {{.Name}}">&times;</button></span>{{end}}
+      <div class="card card-b ed-tagger">
+        <h3 class="ed-h">Tags</h3>
+        <p class="muted small">Tagged stories appear on those team, player and coach pages.</p>
+        <div class="ed-tags" id="tag-chips" aria-label="Tagged">
+          {{range .Chips}}<span class="ed-chip"><input type="hidden" name="{{.Kind}}" value="{{.Value}}"><span class="ed-kind">{{if eq .Kind "team"}}Team{{else if eq .Kind "coach"}}Coach{{else}}Player{{end}}</span> <b>{{.Name}}</b>{{with .Sub}} <span class="muted">{{.}}</span>{{end}}<button type="button" title="Remove" aria-label="Remove {{.Name}}">&times;</button></span>{{end}}
         </div>
-        <div class="ed-search">
-          <input type="search" id="tag-q" placeholder="Search players and coaches" autocomplete="off" aria-autocomplete="list" aria-controls="tag-results">
-          <div class="ed-results" id="tag-results" role="listbox" hidden></div>
+        <div class="ed-tabs" role="tablist">
+          <button type="button" role="tab" data-kind="team" aria-selected="true" class="on">Teams</button>
+          <button type="button" role="tab" data-kind="person" aria-selected="false">Players</button>
+          <button type="button" role="tab" data-kind="coach" aria-selected="false">Coaches</button>
         </div>
-        <p class="muted small">Tagged stories appear on those player and coach pages.</p>
+        <input type="search" id="tag-q" placeholder="Filter teams" autocomplete="off" aria-controls="tag-list">
+        <div class="ed-list" id="tag-list" role="listbox" aria-multiselectable="true"></div>
+        <div class="ed-pager" id="tag-pager" hidden>
+          <button type="button" class="btn btn-ghost" id="tag-prev">&larr; Prev</button>
+          <span class="muted small" id="tag-count"></span>
+          <button type="button" class="btn btn-ghost" id="tag-next">Next &rarr;</button>
+        </div>
       </div>
     </div>
   </div>
@@ -83,57 +84,94 @@
     ev.target.value = '';
   });
   clear.addEventListener('click', function () { image.value = ''; prev.hidden = true; clear.hidden = true; });
-  // Player and coach tags: search, pick, remove.
-  var chips = document.getElementById('tag-chips'), tq = document.getElementById('tag-q'), tr = document.getElementById('tag-results');
-  var hits = [], sel = -1, timer = null, seq = 0;
+  // Tags: teams are all listed here and filtered in the page; players and
+  // coaches are paged from /write/people. Click a row to tag or untag it.
+  var TEAMS = {{.TeamChips}} || [];
+  var KIND_LABEL = { team: 'Team', person: 'Player', coach: 'Coach' };
+  var PLACEHOLDER = { team: 'Filter teams', person: 'Filter players by name, team or position', coach: 'Filter coaches by name or team' };
+  var chips = document.getElementById('tag-chips'), tq = document.getElementById('tag-q'), list = document.getElementById('tag-list');
+  var pager = document.getElementById('tag-pager'), prev = document.getElementById('tag-prev'), next = document.getElementById('tag-next'), count = document.getElementById('tag-count');
+  var kind = 'team', page = 1, pages = 1, rows = [], timer = null, seq = 0;
   function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text) e.textContent = text; return e; }
-  function tagged(h) { return !!chips.querySelector('input[name="' + h.kind + '"][value="' + CSS.escape(h.value) + '"]'); }
+  function chipFor(h) { return chips.querySelector('input[name="' + h.kind + '"][value="' + CSS.escape(h.value) + '"]'); }
   function addChip(h) {
-    if (tagged(h)) return;
     var c = el('span', 'ed-chip'), inp = el('input');
     inp.type = 'hidden'; inp.name = h.kind; inp.value = h.value;
     c.appendChild(inp);
-    if (h.kind === 'coach') { c.appendChild(el('span', 'muted', 'Coach')); c.appendChild(document.createTextNode(' ')); }
+    c.appendChild(el('span', 'ed-kind', KIND_LABEL[h.kind]));
+    c.appendChild(document.createTextNode(' '));
     c.appendChild(el('b', '', h.name));
     if (h.sub) { c.appendChild(document.createTextNode(' ')); c.appendChild(el('span', 'muted', h.sub)); }
     var x = el('button', '', '\u00d7'); x.type = 'button'; x.title = 'Remove'; x.setAttribute('aria-label', 'Remove ' + h.name);
     c.appendChild(x);
     chips.appendChild(c);
   }
-  chips.addEventListener('click', function (ev) { if (ev.target.tagName === 'BUTTON') ev.target.parentNode.remove(); });
-  function show() {
-    tr.innerHTML = '';
-    hits.forEach(function (h, i) {
-      var o = el('div', 'ed-hit' + (i === sel ? ' on' : '') + (tagged(h) ? ' done' : ''));
-      o.setAttribute('role', 'option');
-      o.appendChild(el('b', '', (h.kind === 'coach' ? 'Coach ' : '') + h.name));
-      if (h.sub) o.appendChild(el('span', 'muted', ' ' + h.sub));
-      o.addEventListener('mousedown', function (ev) { ev.preventDefault(); pick(i); });
-      tr.appendChild(o);
-    });
-    tr.hidden = hits.length === 0;
+  function toggle(h) {
+    var inp = chipFor(h);
+    if (inp) inp.parentNode.remove(); else addChip(h);
+    render();
   }
-  function pick(i) { if (hits[i]) addChip(hits[i]); tq.value = ''; hits = []; sel = -1; show(); tq.focus(); }
-  tq.addEventListener('input', function () {
-    clearTimeout(timer);
-    var v = tq.value.trim();
-    if (v.length < 2) { hits = []; show(); return; }
-    timer = setTimeout(function () {
-      var mine = ++seq;
-      fetch('/write/people?q=' + encodeURIComponent(v)).then(function (r) { return r.ok ? r.json() : []; }).then(function (list) {
-        if (mine !== seq) return;
-        hits = list; sel = list.length ? 0 : -1; show();
+  chips.addEventListener('click', function (ev) { if (ev.target.tagName === 'BUTTON') { ev.target.parentNode.remove(); render(); } });
+  function render() {
+    list.innerHTML = '';
+    if (!rows.length) list.appendChild(el('div', 'ed-empty muted small', 'No matches.'));
+    rows.forEach(function (h) {
+      var on = !!chipFor(h);
+      var b = el('button', 'ed-row' + (on ? ' on' : ''));
+      b.type = 'button'; b.setAttribute('role', 'option'); b.setAttribute('aria-selected', on ? 'true' : 'false');
+      b.appendChild(el('span', 'ed-check', on ? '\u2713' : ''));
+      b.appendChild(el('b', '', h.name));
+      if (h.sub) b.appendChild(el('span', 'muted', h.sub));
+      b.addEventListener('click', function () { toggle(h); });
+      list.appendChild(b);
+    });
+    pager.hidden = kind === 'team';
+    prev.disabled = page <= 1; next.disabled = page >= pages;
+  }
+  function load() {
+    var f = tq.value.trim().toLowerCase();
+    if (kind === 'team') {
+      var words = f.split(/\s+/).filter(Boolean);
+      rows = TEAMS.filter(function (t) {
+        var hay = (t.name + ' ' + t.sub).toLowerCase();
+        return words.every(function (w) { return hay.indexOf(w) >= 0; });
       });
-    }, 200);
+      render();
+      return;
+    }
+    var mine = ++seq;
+    fetch('/write/people?kind=' + kind + '&page=' + page + '&q=' + encodeURIComponent(tq.value.trim()))
+      .then(function (r) { return r.ok ? r.json() : { items: [], total: 0, page: 1, pages: 1 }; })
+      .then(function (j) {
+        if (mine !== seq) return;
+        rows = j.items; page = j.page; pages = j.pages;
+        count.textContent = j.total ? ((page - 1) * 20 + 1) + '\u2013' + ((page - 1) * 20 + rows.length) + ' of ' + j.total : '';
+        render();
+      });
+  }
+  document.querySelectorAll('.ed-tabs [data-kind]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      kind = b.dataset.kind; page = 1;
+      document.querySelectorAll('.ed-tabs [data-kind]').forEach(function (o) {
+        o.classList.toggle('on', o === b); o.setAttribute('aria-selected', o === b ? 'true' : 'false');
+      });
+      tq.placeholder = PLACEHOLDER[kind];
+      rows = []; list.innerHTML = '';
+      load();
+    });
+  });
+  tq.addEventListener('input', function () {
+    page = 1;
+    clearTimeout(timer);
+    timer = setTimeout(load, kind === 'team' ? 0 : 200);
   });
   tq.addEventListener('keydown', function (ev) {
-    if (ev.key === 'ArrowDown' && hits.length) { sel = (sel + 1) % hits.length; show(); ev.preventDefault(); }
-    else if (ev.key === 'ArrowUp' && hits.length) { sel = (sel - 1 + hits.length) % hits.length; show(); ev.preventDefault(); }
-    else if (ev.key === 'Enter') { ev.preventDefault(); if (sel >= 0) pick(sel); }
-    else if (ev.key === 'Escape') { hits = []; show(); }
+    // Enter tags the first row instead of submitting the story.
+    if (ev.key === 'Enter') { ev.preventDefault(); if (rows.length) toggle(rows[0]); }
   });
-  tq.addEventListener('blur', function () { setTimeout(function () { hits = []; show(); }, 150); });
-
+  prev.addEventListener('click', function () { if (page > 1) { page--; load(); } });
+  next.addEventListener('click', function () { if (page < pages) { page++; load(); } });
+  load();
 })();
 </script>
 {{end}}

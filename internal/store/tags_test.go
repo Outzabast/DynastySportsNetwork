@@ -45,6 +45,34 @@ func TestArticlePlayerAndCoachTags(t *testing.T) {
 		t.Fatalf("SearchCoaches = %+v, %v", hits, err)
 	}
 
+	// Browsing: everyone with a season on this branch, filtered by name,
+	// team or position, a page at a time with the total.
+	if _, err := st.DB.Exec(ctx, `INSERT INTO player_season (branch_id, season_index, person_id, team_id, on_roster, position, school_year, redshirt,
+		jersey, height, weight, star_rating, portrait, is_captain, injury_status, snapshot_id)
+		VALUES (1, 0, $1, 3, true, 'QB', 'Junior', '', 7, 75, 215, 4, '', false, 'Uninjured', 1)`, passer); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"", "passer", "t3", "QB", " t3  qb ", "pat T3"} {
+		got, total, err := q.BrowsePeople(ctx, c, f, Page{Limit: 20})
+		if err != nil || total != 1 || len(got) != 1 || got[0].ID != passer || got[0].TeamID != 3 {
+			t.Fatalf("BrowsePeople(%q) = %+v, %d, %v", f, got, total, err)
+		}
+	}
+	for _, f := range []string{"zzz", "t3 hb"} {
+		if got, total, err := q.BrowsePeople(ctx, c, f, Page{Limit: 20}); err != nil || total != 0 || len(got) != 0 {
+			t.Fatalf("BrowsePeople(%q) = %+v, %d, %v", f, got, total, err)
+		}
+	}
+	if got, total, err := q.BrowsePeople(ctx, c, "", Page{Offset: 20, Limit: 20}); err != nil || total != 1 || len(got) != 0 {
+		t.Fatalf("BrowsePeople past the end = %+v, %d, %v", got, total, err)
+	}
+	for _, f := range []string{"", "doe", "t3"} {
+		got, total, err := q.BrowseCoaches(ctx, c, f, Page{Limit: 20})
+		if err != nil || total != 1 || len(got) != 1 || got[0].Key != key {
+			t.Fatalf("BrowseCoaches(%q) = %+v, %d, %v", f, got, total, err)
+		}
+	}
+
 	save := func(a *Article) int {
 		t.Helper()
 		id, err := q.SaveArticle(ctx, c, a)

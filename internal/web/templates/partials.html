@@ -122,11 +122,12 @@
 {{end}}
 
 {{define "biocard"}}{{/* . = page data with BioHTML, BioEditURL, CanEdit */}}
-{{if .BioHTML}}
-<div class="card bio-card">
-  <h2>Bio{{if .CanEdit}} <a href="{{.BioEditURL}}">Edit bio</a>{{end}}</h2>
+{{if .BioHTML}}{{/* Collapsed by default so long bios don't push the stats down. */}}
+<details class="card bio-card">
+  <summary class="card-h"><span class="bio-title">Bio</span>
+    <span class="bio-actions">{{if .CanEdit}}<a href="{{.BioEditURL}}">Edit bio</a>{{end}}<span class="bio-toggle" aria-hidden="true"></span></span></summary>
   <div class="story-body">{{.BioHTML}}</div>
-</div>
+</details>
 {{else if .CanEdit}}
 <p class="bio-add"><a href="{{.BioEditURL}}">+ Add a bio</a></p>
 {{end}}

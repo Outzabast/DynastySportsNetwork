@@ -163,7 +163,7 @@ func (s *Site) routes() http.Handler {
 	mux.HandleFunc("POST /story/{id}/delete", s.action(s.deleteStory))
 	mux.HandleFunc("POST /write/preview", s.action(s.previewStory))
 	mux.HandleFunc("POST /write/upload", s.action(s.upload))
-	mux.HandleFunc("GET /write/people", s.tagSearch)
+	mux.HandleFunc("GET /write/people", s.tagBrowse)
 	mux.HandleFunc("GET /player/{id}", s.page(s.player))
 	mux.HandleFunc("GET /player/{id}/bio", s.page(s.bioEditor))
 	mux.HandleFunc("POST /player/{id}/bio", s.action(s.saveBio))

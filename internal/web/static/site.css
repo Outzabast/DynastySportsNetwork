@@ -341,6 +341,17 @@ code { font-size: 12px; background: #f3f3f3; padding: 1px 4px; border-radius: 3p
 .ed-h { font: 700 14px/1.2 var(--font-head); margin: 0 0 10px; }
 .ed-lead { width: 100%; border-radius: 4px; margin-bottom: 10px; }
 .ed-teams { height: 220px; }
+.bio-card .story-body { max-width: none; margin: 0; padding: 16px 20px 4px; }
+.bio-add { margin: 0 0 16px; font-size: 13px; font-weight: 700; }
+.ed-tags { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+.ed-tags:empty { display: none; }
+.ed-chip { display: flex; align-items: baseline; gap: 4px; border: 1px solid var(--line); border-radius: 4px; padding: 4px 8px; font-size: 13px; background: #fff; }
+.ed-chip button { margin-left: auto; border: 0; background: none; font-size: 16px; line-height: 1; cursor: pointer; color: var(--ink-2); padding: 0 2px; }
+.ed-search input { width: 100%; }
+.ed-results { margin-top: 4px; background: #fff; border: 1px solid var(--line); border-radius: 4px; max-height: 320px; overflow-y: auto; }
+.ed-hit { padding: 6px 10px; font-size: 13px; cursor: pointer; }
+.ed-hit.on { background: var(--line-2); }
+.ed-hit.done { opacity: .5; }
 .ed-danger { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 16px; }
 
 /* Game preview */

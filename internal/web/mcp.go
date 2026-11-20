@@ -30,7 +30,7 @@ const mcpPath = "/mcp"
 
 var mcpVersions = []string{"2025-06-18", "2025-03-26", "2024-11-05"}
 
-const mcpInstructions = `Dynasty Sports Network: an ESPN-style site for one EA Sports College Football 27 dynasty. Every team, player, coach and game comes from the user's dynasty save, not real life. Start with site_overview (current week, seasons, team ids, page guide), use search to find a player's or team's page, then read_page any path. Pages link to each other with site paths (player pages are /player/<uuid>), and each page lists the query parameters its filters accept (season is a calendar year). Exports (/player/<id>/export, /game/<season>/<row>/export, /team/<id>/export/season, /team/<id>/export/stats, /stats/teams/export) give the full stat tables of those pages. To write for the site, use save_article (drafts unless publish is true) and get_article to revise a story.`
+const mcpInstructions = `Dynasty Sports Network: an ESPN-style site for one EA Sports College Football 27 dynasty. Every team, player, coach and game comes from the user's dynasty save, not real life. Start with site_overview (current week, seasons, team ids, page guide), use search to find a player's or team's page, then read_page any path. Pages link to each other with site paths (player pages are /player/<uuid>), and each page lists the query parameters its filters accept (season is a calendar year). Exports (/player/<id>/export, /game/<season>/<row>/export, /team/<id>/export/season, /team/<id>/export/stats, /stats/teams/export) give the full stat tables of those pages. To write for the site, use save_article (drafts unless publish is true) and get_article to revise a story; tag the teams, players and coaches a story is about so it shows on their pages. get_bio and save_bio read and write the bio on a player's or coach's page.`
 
 const pageGuide = `Pages (read_page paths; season=<year> works on most):
 - /  front page: headlines, top games, standings snapshot
@@ -44,14 +44,14 @@ const pageGuide = `Pages (read_page paths; season=<year> works on most):
 - /team/<id>/schedule?season=  results and schedule
 - /team/<id>/stats?season=  team and player season stats
 - /team/<id>/history  season-by-season records, bowls, coaches, NFL draft picks
-- /coaches, /coach/<key>  coaching records, stints, players drafted
-- /player/<uuid>  bio, career stats by season, game logs, awards, draft, transactions
+- /coaches, /coach/<key>  written bio, coaching records, stints, players drafted, tagged news
+- /player/<uuid>  bio facts and written bio, career stats by season, game logs, awards, draft, transactions, tagged news
 - /stats?season=&conf=&cat=  individual leaders;  /stats/teams?season=&conf=&cat=&mode=  team comparison
 - /awards?season=  season awards and players of the week
 - /records?scope=&name=  record book (league / conference / team)
 - /recruiting?season=  recruiting classes and commits
 - /history  champions and season summaries
-- /news, /story/<id>  articles
+- /news?team=&player=&coach=, /story/<id>  articles
 - /search?q=  player and team search
 - /dynasties  all recorded dynasties (pass dynasty=<id> to any tool to read another one)
 - /admin  data status: saves recorded, review flags
@@ -225,6 +225,10 @@ func (s *Site) mcpCall(r *http.Request, req rpcRequest) (any, *rpcError) {
 			text, err = s.mcpGetArticle(r, p.Arguments)
 		case "save_article":
 			text, err = s.mcpSaveArticle(r, p.Arguments)
+		case "get_bio":
+			text, err = s.mcpGetBio(r, p.Arguments)
+		case "save_bio":
+			text, err = s.mcpSaveBio(r, p.Arguments)
 		default:
 			return nil, &rpcError{-32602, "unknown tool " + p.Name}
 		}
@@ -262,8 +266,8 @@ var mcpTools = []map[string]any{
 	},
 	{
 		"name":        "search",
-		"title":       "Search players and teams",
-		"description": "Find players (current and former, all seasons) and teams by name. Returns each match's page path for read_page.",
+		"title":       "Search players, coaches and teams",
+		"description": "Find players (current and former, all seasons), coaches and teams by name. Returns each match's page path for read_page; the uuid or key in a player's or coach's path is what save_article takes to tag them.",
 		"inputSchema": map[string]any{
 			"type":       "object",
 			"properties": map[string]any{"query": map[string]any{"type": "string", "description": "Part of a name, at least 2 characters"}, "dynasty": dynastyArg},
@@ -405,8 +409,25 @@ func (s *Site) mcpSearch(r *http.Request, a mcpArgs) (string, error) {
 			fmt.Fprintf(&b, "- %s, %s %s, %s: /player/%s\n", p.Name(), p.Position, p.ClassYear, team, p.ID)
 		}
 	}
+	coaches, err := s.q.SearchCoaches(ctx, c, term, 20)
+	if err != nil {
+		return "", err
+	}
+	if len(coaches) > 0 {
+		if b.Len() > 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString("## Coaches (latest season on record; up to 20)\n\n")
+		for _, k := range coaches {
+			team := "no team"
+			if t := byID[k.TeamID]; t != nil {
+				team = t.Name
+			}
+			fmt.Fprintf(&b, "- %s, %s, %s %d: %s\n", k.Name(), positionLabel(k.Position), team, c.YearOf(k.Season), coachURL(k.Key))
+		}
+	}
 	if b.Len() == 0 {
-		return "No players or teams match " + term + ".", nil
+		return "No players, coaches or teams match " + term + ".", nil
 	}
 	return b.String(), nil
 }

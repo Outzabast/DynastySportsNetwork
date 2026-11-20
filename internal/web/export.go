@@ -255,8 +255,10 @@ func (s *Site) exportPlayer(r *http.Request, c *store.Ctx) (*xdoc, error) {
 		awards []*store.Award
 		events []*store.Event
 		picks  []*store.DraftPick
+		bioMD  string
 	)
 	err = parallel(
+		func() (err error) { bioMD, err = s.q.PlayerBio(ctx, c, id); return },
 		func() (err error) { bio, err = s.q.Person(ctx, c, id); return },
 		func() (err error) { teams, err = s.q.Teams(ctx, c, c.Season); return },
 		func() (err error) { lines, err = s.q.SeasonLines(ctx, c, -1, id, -1); return },
@@ -304,7 +306,7 @@ func (s *Site) exportPlayer(r *http.Request, c *store.Ctx) (*xdoc, error) {
 		Meta:  []xkv{{"Source", exportSource}, {"Dynasty", c.Name}, {"Data through", dataThrough(c, c.Season)}},
 	}
 
-	profile := &xsheet{Name: "Profile", Heading: "Profile: " + bio.Name(), Meta: playerMeta(bio, team)}
+	profile := &xsheet{Name: "Profile", Heading: "Profile: " + bio.Name(), Meta: playerMeta(bio, team), Body: bioMD}
 	if len(awards) > 0 {
 		xt := &xtable{Title: "Awards and Honors", Headers: []string{"When", "Award", "Team"}}
 		for _, a := range awards {

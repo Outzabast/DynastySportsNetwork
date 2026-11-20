@@ -543,3 +543,30 @@ CREATE TABLE IF NOT EXISTS draft_pick (
     PRIMARY KEY (branch_id, person_id)
 );
 CREATE INDEX IF NOT EXISTS draft_pick_team ON draft_pick(branch_id, team_id, season_index);
+
+-- Articles can be tagged with players (person_ids, minted UUIDs) and coaches
+-- (coach_keys, CoachKey). Tagged stories appear on those pages.
+ALTER TABLE article ADD COLUMN IF NOT EXISTS coach_keys text[] NOT NULL DEFAULT '{}';
+CREATE INDEX IF NOT EXISTS article_person ON article USING gin (person_ids);
+CREATE INDEX IF NOT EXISTS article_coach ON article USING gin (coach_keys);
+
+-- Bios are written on the site (Markdown), not read from the save. They
+-- belong to the dynasty, not a branch, so a revert never hides them, and are
+-- keyed to stable identities only: the minted person UUID, or the coach key.
+-- A tool that ever merges or splits people must move person_bio rows (and
+-- article.person_ids) with them. Coach keys are name + portrait, which the
+-- game can repeat, so two coaches sharing a key share one bio.
+CREATE TABLE IF NOT EXISTS person_bio (
+    dynasty_id int NOT NULL REFERENCES dynasty(id),
+    person_id  uuid NOT NULL REFERENCES person(id),
+    body       text NOT NULL,
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (dynasty_id, person_id)
+);
+CREATE TABLE IF NOT EXISTS coach_bio (
+    dynasty_id int NOT NULL REFERENCES dynasty(id),
+    coach_key  text NOT NULL,
+    body       text NOT NULL,
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (dynasty_id, coach_key)
+);

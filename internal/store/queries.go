@@ -1689,9 +1689,14 @@ type DraftPick struct {
 	Coach         *CoachRef
 }
 
-// CoachRef names a coach and links his page.
+// CoachRef names a coach and links his page. Position, TeamID, Asset and
+// Season (his latest captured season) are set by CoachRefs and SearchCoaches.
 type CoachRef struct {
 	Key, First, Last string
+	Position         string
+	TeamID           int
+	Asset            string
+	Season           int
 }
 
 // DraftFilter narrows DraftPicks; zero values match everything.

@@ -35,6 +35,8 @@
   </details>
 </div>
 
+{{template "biocard" .}}
+
 <div class="grid g-2">
   <div>
     {{if .Tables}}
@@ -62,6 +64,7 @@
     {{end}}
   </div>
   <div>
+    {{with .News}}{{template "newscard" .}}{{end}}
     {{with .Awards}}
     <div class="card">
       <h2>Awards &amp; Honors</h2>

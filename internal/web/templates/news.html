@@ -1,7 +1,7 @@
-{{define "title"}}{{with .Team}}{{.Name}} {{end}}News{{end}}
+{{define "title"}}{{with .Team}}{{.Name}} {{end}}{{with .Subject}}{{.Name}} {{end}}News{{end}}
 {{define "content"}}
 <div class="news-head">
-  <h1 class="page-title">{{with .Team}}{{template "teamlogo" .}} {{.Long}} {{end}}News</h1>
+  <h1 class="page-title">{{with .Team}}{{template "teamlogo" .}} {{.Long}} {{end}}{{with .Subject}}<a href="{{.URL}}">{{.Name}}</a> {{end}}News</h1>
   {{if .CanEdit}}<a class="btn" href="/write">Write a story</a>{{end}}
 </div>
 <div class="grid g-2">

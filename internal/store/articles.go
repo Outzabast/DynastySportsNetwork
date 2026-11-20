@@ -26,7 +26,8 @@ type Article struct {
 	GameRow      *int
 	Kind         string // "preview" or "recap" for game stories, else ""
 	TeamIDs      []int
-	PersonIDs    []uuid.UUID
+	PersonIDs    []uuid.UUID // tagged players
+	CoachKeys    []string    // tagged coaches (CoachKey)
 	Published    bool
 	PublishedAt  *time.Time
 	CreatedAt    time.Time
@@ -73,13 +74,13 @@ func Slugify(s string) string {
 }
 
 const articleCols = `id, dynasty_id, slug, headline, dek, byline, body, image, image_caption, season_index, game_row, team_ids, person_ids,
-	published, published_at, created_at, updated_at, kind`
+	published, published_at, created_at, updated_at, kind, coach_keys`
 
 func scanArticle(row interface{ Scan(...any) error }) (*Article, error) {
 	a := &Article{}
 	var teams []int32
 	err := row.Scan(&a.ID, &a.Dynasty, &a.Slug, &a.Headline, &a.Dek, &a.Byline, &a.Body, &a.Image, &a.ImageCaption, &a.Season, &a.GameRow,
-		&teams, &a.PersonIDs, &a.Published, &a.PublishedAt, &a.CreatedAt, &a.UpdatedAt, &a.Kind)
+		&teams, &a.PersonIDs, &a.Published, &a.PublishedAt, &a.CreatedAt, &a.UpdatedAt, &a.Kind, &a.CoachKeys)
 	for _, t := range teams {
 		a.TeamIDs = append(a.TeamIDs, int(t))
 	}
@@ -88,9 +89,11 @@ func scanArticle(row interface{ Scan(...any) error }) (*Article, error) {
 
 // ArticleFilter narrows an article listing.
 type ArticleFilter struct {
-	Drafts bool // include unpublished stories
-	Team   int  // -1 = any
-	Season int  // with GameRow: stories about one game; -1 = any
+	Drafts bool      // include unpublished stories
+	Team   int       // -1 = any
+	Person uuid.UUID // tagged player; uuid.Nil = any
+	Coach  string    // tagged coach key; "" = any
+	Season int       // with GameRow: stories about one game; -1 = any
 	Game   int
 	Limit  int
 }
@@ -102,7 +105,8 @@ func (q *Queries) Articles(ctx context.Context, c *Ctx, f ArticleFilter) ([]*Art
 	}
 	rows, err := q.s.DB.Query(ctx, `SELECT `+articleCols+` FROM article WHERE dynasty_id = $1
 		AND ($2 OR published) AND ($3 < 0 OR $3 = ANY(team_ids)) AND ($4 < 0 OR (season_index = $4 AND game_row = $5))
-		ORDER BY COALESCE(published_at, updated_at) DESC, id DESC LIMIT $6`, c.Dynasty, f.Drafts, f.Team, f.Season, f.Game, f.Limit)
+		AND ($7::uuid IS NULL OR $7 = ANY(person_ids)) AND ($8 = '' OR $8 = ANY(coach_keys))
+		ORDER BY COALESCE(published_at, updated_at) DESC, id DESC LIMIT $6`, c.Dynasty, f.Drafts, f.Team, f.Season, f.Game, f.Limit, nullUUID(f.Person), f.Coach)
 	if err != nil {
 		return nil, err
 	}
@@ -139,18 +143,22 @@ func (q *Queries) SaveArticle(ctx context.Context, c *Ctx, a *Article) (int, err
 	if persons == nil {
 		persons = []uuid.UUID{}
 	}
+	coaches := a.CoachKeys
+	if coaches == nil {
+		coaches = []string{}
+	}
 	if a.ID == 0 {
 		err := q.s.DB.QueryRow(ctx, `INSERT INTO article (dynasty_id, slug, headline, dek, byline, body, image, image_caption, season_index, game_row,
-			team_ids, person_ids, published, published_at, kind)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::int[], $12::uuid[], $13, CASE WHEN $13 THEN now() END, $14) RETURNING id`,
-			c.Dynasty, a.Slug, a.Headline, a.Dek, a.Byline, a.Body, a.Image, a.ImageCaption, a.Season, a.GameRow, teams, persons, a.Published, a.Kind).Scan(&a.ID)
+			team_ids, person_ids, published, published_at, kind, coach_keys)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::int[], $12::uuid[], $13, CASE WHEN $13 THEN now() END, $14, $15::text[]) RETURNING id`,
+			c.Dynasty, a.Slug, a.Headline, a.Dek, a.Byline, a.Body, a.Image, a.ImageCaption, a.Season, a.GameRow, teams, persons, a.Published, a.Kind, coaches).Scan(&a.ID)
 		return a.ID, err
 	}
 	tag, err := q.s.DB.Exec(ctx, `UPDATE article SET slug = $3, headline = $4, dek = $5, byline = $6, body = $7, image = $8, image_caption = $9,
 		season_index = $10, game_row = $11, team_ids = $12::int[], person_ids = $13::uuid[], published = $14,
-		published_at = CASE WHEN $14 AND published_at IS NULL THEN now() ELSE published_at END, updated_at = now(), kind = $15
+		published_at = CASE WHEN $14 AND published_at IS NULL THEN now() ELSE published_at END, updated_at = now(), kind = $15, coach_keys = $16::text[]
 		WHERE dynasty_id = $1 AND id = $2`,
-		c.Dynasty, a.ID, a.Slug, a.Headline, a.Dek, a.Byline, a.Body, a.Image, a.ImageCaption, a.Season, a.GameRow, teams, persons, a.Published, a.Kind)
+		c.Dynasty, a.ID, a.Slug, a.Headline, a.Dek, a.Byline, a.Body, a.Image, a.ImageCaption, a.Season, a.GameRow, teams, persons, a.Published, a.Kind, coaches)
 	if err == nil && tag.RowsAffected() == 0 {
 		err = errors.New("article not found")
 	}

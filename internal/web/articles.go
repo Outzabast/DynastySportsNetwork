@@ -2,6 +2,7 @@ package web
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -18,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/extension"
 
@@ -93,6 +95,73 @@ type StoryCard struct {
 	Teams []*store.Team
 }
 
+// NewsCard is the "<Name> News" box on team, player and coach pages.
+type NewsCard struct {
+	Title   string // "Texas State News"
+	AllURL  string // the /news listing filtered to the subject
+	Stories []StoryCard
+}
+
+func newsCard(title, all string, stories []StoryCard) *NewsCard {
+	if len(stories) == 0 {
+		return nil
+	}
+	return &NewsCard{Title: title, AllURL: all, Stories: stories}
+}
+
+// TagChip is one tagged player or coach in the editor and on a story.
+type TagChip struct {
+	Kind  string `json:"kind"`  // "person" or "coach" (the form field name)
+	Value string `json:"value"` // person UUID or coach key
+	Name  string `json:"name"`
+	Sub   string `json:"sub"` // "QB · Texas State"
+	URL   string `json:"url"`
+}
+
+func playerChip(p store.PlayerRef, teams map[int]*store.Team) TagChip {
+	sub := p.Position
+	if t := teams[p.TeamID]; t != nil {
+		sub = strings.TrimPrefix(sub+" · "+t.Name, " · ")
+	}
+	return TagChip{Kind: "person", Value: p.ID.String(), Name: p.Name(), Sub: sub, URL: "/player/" + p.ID.String()}
+}
+
+func coachChip(k store.CoachRef, teams map[int]*store.Team) TagChip {
+	sub := positionLabel(k.Position)
+	if t := teams[k.TeamID]; t != nil {
+		sub = strings.TrimPrefix(sub+" · "+t.Name, " · ")
+	}
+	return TagChip{Kind: "coach", Value: k.Key, Name: k.Name(), Sub: sub, URL: coachURL(k.Key)}
+}
+
+// tagChips loads the chips for an article's player and coach tags.
+func (s *Site) tagChips(ctx context.Context, c *store.Ctx, teams map[int]*store.Team, a *store.Article) ([]TagChip, error) {
+	people, coaches, err := s.resolveTags(ctx, c, a.PersonIDs, a.CoachKeys)
+	if err != nil {
+		return nil, err
+	}
+	var out []TagChip
+	for _, p := range people {
+		out = append(out, playerChip(p, teams))
+	}
+	for _, k := range coaches {
+		out = append(out, coachChip(k, teams))
+	}
+	return out, nil
+}
+
+// resolveTags keeps the players and coaches that exist in this dynasty, in
+// the order given, without repeats.
+func (s *Site) resolveTags(ctx context.Context, c *store.Ctx, ids []uuid.UUID, keys []string) ([]store.PlayerRef, []store.CoachRef, error) {
+	var people []store.PlayerRef
+	var coaches []store.CoachRef
+	err := parallel(
+		func() (err error) { people, err = s.q.PeopleRefs(ctx, c, ids); return },
+		func() (err error) { coaches, err = s.q.CoachRefs(ctx, c, keys); return },
+	)
+	return people, coaches, err
+}
+
 func (s *Site) storyCards(teams map[int]*store.Team, list []*store.Article) []StoryCard {
 	out := make([]StoryCard, 0, len(list))
 	for _, a := range list {
@@ -109,7 +178,12 @@ func (s *Site) storyCards(teams map[int]*store.Team, list []*store.Article) []St
 
 func (s *Site) news(r *http.Request, c *store.Ctx) (string, data, error) {
 	ctx := r.Context()
-	f := store.ArticleFilter{Drafts: s.canEdit(r), Team: atoi(r.URL.Query().Get("team"), -1), Season: -1, Limit: 100}
+	qs := r.URL.Query()
+	f := store.ArticleFilter{Drafts: s.canEdit(r), Team: atoi(qs.Get("team"), -1), Season: -1, Limit: 100}
+	if id, err := uuid.Parse(qs.Get("player")); err == nil {
+		f.Person = id
+	}
+	f.Coach = qs.Get("coach")
 	list, err := s.q.Articles(ctx, c, f)
 	if err != nil {
 		return "", nil, err
@@ -118,11 +192,34 @@ func (s *Site) news(r *http.Request, c *store.Ctx) (string, data, error) {
 	if err != nil {
 		return "", nil, err
 	}
-	var team *store.Team
+	d := data{"Stories": s.storyCards(teams, list)}
 	if f.Team >= 0 {
-		team = teams[f.Team]
+		d["Team"] = teams[f.Team]
 	}
-	return "news", data{"Stories": s.storyCards(teams, list), "Team": team}, nil
+	// A player's or coach's news: name them in the heading.
+	if f.Person != uuid.Nil || f.Coach != "" {
+		var ids []uuid.UUID
+		var keys []string
+		if f.Person != uuid.Nil {
+			ids = []uuid.UUID{f.Person}
+		}
+		if f.Coach != "" {
+			keys = []string{f.Coach}
+		}
+		people, coaches, err := s.resolveTags(ctx, c, ids, keys)
+		if err != nil {
+			return "", nil, err
+		}
+		switch {
+		case len(people) == 1:
+			d["Subject"] = playerChip(people[0], teams)
+		case len(coaches) == 1:
+			d["Subject"] = coachChip(coaches[0], teams)
+		default:
+			return "", nil, errNotFound
+		}
+	}
+	return "news", d, nil
 }
 
 func (s *Site) story(r *http.Request, c *store.Ctx) (string, data, error) {
@@ -138,7 +235,11 @@ func (s *Site) story(r *http.Request, c *store.Ctx) (string, data, error) {
 	if err != nil {
 		return "", nil, err
 	}
-	d := data{"A": a, "Body": renderMarkdown(a.Body), "Tagged": s.storyCards(teams, []*store.Article{a})[0].Teams}
+	chips, err := s.tagChips(ctx, c, teams, a)
+	if err != nil {
+		return "", nil, err
+	}
+	d := data{"A": a, "Body": renderMarkdown(a.Body), "Tagged": s.storyCards(teams, []*store.Article{a})[0].Teams, "TaggedPeople": chips}
 	if a.HasGame() {
 		if g, err := s.q.Game(ctx, c, *a.Season, *a.GameRow); err == nil && g != nil {
 			cards, err := s.cards(ctx, c, *a.Season, []*store.Game{g}, false)
@@ -213,7 +314,11 @@ func (s *Site) editor(r *http.Request, c *store.Ctx) (string, data, error) {
 	if a.HasGame() {
 		gameRef = fmt.Sprintf("%d/%d", c.YearOf(*a.Season), *a.GameRow)
 	}
-	return "editor", data{"A": a, "Teams": list, "Tagged": tagged, "GameRef": gameRef, "Error": r.URL.Query().Get("error")}, nil
+	chips, err := s.tagChips(ctx, c, teams, a)
+	if err != nil {
+		return "", nil, err
+	}
+	return "editor", data{"A": a, "Teams": list, "Tagged": tagged, "Chips": chips, "GameRef": gameRef, "Error": r.URL.Query().Get("error")}, nil
 }
 
 // parseGameRef reads "2034/865" or a pasted box score URL ending in it.
@@ -294,6 +399,23 @@ func (s *Site) saveStory(w http.ResponseWriter, r *http.Request, c *store.Ctx) (
 			a.TeamIDs = append(a.TeamIDs, id)
 		}
 	}
+	var ids []uuid.UUID
+	for _, v := range f["person"] {
+		if id, err := uuid.Parse(v); err == nil {
+			ids = append(ids, id)
+		}
+	}
+	people, coaches, err := s.resolveTags(ctx, c, ids, f["coach"])
+	if err != nil {
+		return "", err
+	}
+	a.PersonIDs, a.CoachKeys = nil, nil
+	for _, p := range people {
+		a.PersonIDs = append(a.PersonIDs, p.ID)
+	}
+	for _, k := range coaches {
+		a.CoachKeys = append(a.CoachKeys, k.Key)
+	}
 	if a.Image != "" && !strings.HasPrefix(a.Image, "/media/") {
 		a.Image = "" // only images served by this site
 	}
@@ -318,6 +440,48 @@ func (s *Site) deleteStory(w http.ResponseWriter, r *http.Request, c *store.Ctx)
 		return "", err
 	}
 	return "/news", nil
+}
+
+// tagSearch suggests players and coaches for the editor's tag picker:
+// GET /write/people?q=smith -> [{kind, value, name, sub, url}].
+func (s *Site) tagSearch(w http.ResponseWriter, r *http.Request) {
+	if !s.canEdit(r) {
+		http.NotFound(w, r)
+		return
+	}
+	c, err := s.context(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	ctx := r.Context()
+	term := strings.TrimSpace(r.URL.Query().Get("q"))
+	out := []TagChip{}
+	if len(term) >= 2 {
+		var teams map[int]*store.Team
+		var people []store.PlayerRef
+		var coaches []store.CoachRef
+		err := parallel(
+			func() (err error) { teams, err = s.q.Teams(ctx, c, c.Season); return },
+			func() (err error) { people, err = s.q.SearchPeople(ctx, c, term); return },
+			func() (err error) { coaches, err = s.q.SearchCoaches(ctx, c, term, 5); return },
+		)
+		if err != nil {
+			s.fail(w, err)
+			return
+		}
+		for i, p := range people {
+			if i == 10 {
+				break
+			}
+			out = append(out, playerChip(p, teams))
+		}
+		for _, k := range coaches {
+			out = append(out, coachChip(k, teams))
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(out)
 }
 
 // preview renders Markdown for the editor's preview pane.

@@ -5,7 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
+
+	"github.com/google/uuid"
 
 	"github.com/outzabast/dynastysportsnetwork/internal/store"
 )
@@ -44,6 +47,8 @@ var articleTools = []map[string]any{
 				"byline":        map[string]any{"type": "string", "description": "Author shown on the story, e.g. AP"},
 				"body":          map[string]any{"type": "string", "description": "Markdown body; required when creating"},
 				"teams":         map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "Team ids the story is about (site_overview lists them); the story appears on those team pages"},
+				"players":       map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Players the story is about, by the uuid in their /player/<uuid> path (search finds them); the story appears on those player pages"},
+				"coaches":       map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Coaches the story is about, by the key in their /coach/<key> path (search finds them); the story appears on those coach pages"},
 				"game":          map[string]any{"type": "string", "description": "Link the story to one game, as <season>/<row> from its /game path, e.g. 2036/410. Empty string removes the link"},
 				"kind":          map[string]any{"type": "string", "enum": []string{"recap", "preview"}, "description": "With game: recap (default) or preview"},
 				"image":         map[string]any{"type": "string", "description": "Lead image, a /media/... path on this site"},
@@ -59,18 +64,20 @@ var articleTools = []map[string]any{
 func init() { mcpTools = append(mcpTools, articleTools...) }
 
 type articleArgs struct {
-	ID           int     `json:"id"`
-	Dynasty      int     `json:"dynasty"`
-	Headline     *string `json:"headline"`
-	Dek          *string `json:"dek"`
-	Byline       *string `json:"byline"`
-	Body         *string `json:"body"`
-	Teams        *[]int  `json:"teams"`
-	Game         *string `json:"game"`
-	Kind         *string `json:"kind"`
-	Image        *string `json:"image"`
-	ImageCaption *string `json:"image_caption"`
-	Publish      *bool   `json:"publish"`
+	ID           int       `json:"id"`
+	Dynasty      int       `json:"dynasty"`
+	Headline     *string   `json:"headline"`
+	Dek          *string   `json:"dek"`
+	Byline       *string   `json:"byline"`
+	Body         *string   `json:"body"`
+	Teams        *[]int    `json:"teams"`
+	Players      *[]string `json:"players"`
+	Coaches      *[]string `json:"coaches"`
+	Game         *string   `json:"game"`
+	Kind         *string   `json:"kind"`
+	Image        *string   `json:"image"`
+	ImageCaption *string   `json:"image_caption"`
+	Publish      *bool     `json:"publish"`
 }
 
 func parseArticleArgs(raw json.RawMessage) (articleArgs, error) {
@@ -111,6 +118,22 @@ func (s *Site) mcpGetArticle(r *http.Request, raw json.RawMessage) (string, erro
 			ids[i] = itoa(t)
 		}
 		fmt.Fprintf(&b, "- teams: %s\n", strings.Join(ids, ", "))
+	}
+	people, coaches, err := s.resolveTags(r.Context(), c, art.PersonIDs, art.CoachKeys)
+	if err != nil {
+		return "", err
+	}
+	if len(people) > 0 {
+		b.WriteString("- players:\n")
+		for _, p := range people {
+			fmt.Fprintf(&b, "  - %s, %s: /player/%s\n", p.Name(), p.Position, p.ID)
+		}
+	}
+	if len(coaches) > 0 {
+		b.WriteString("- coaches:\n")
+		for _, k := range coaches {
+			fmt.Fprintf(&b, "  - %s, %s: %s\n", k.Name(), positionLabel(k.Position), coachURL(k.Key))
+		}
 	}
 	if art.Image != "" {
 		fmt.Fprintf(&b, "- image: %s (%s)\n", art.Image, art.ImageCaption)
@@ -177,6 +200,60 @@ func (s *Site) mcpSaveArticle(r *http.Request, raw json.RawMessage) (string, err
 				return "", fmt.Errorf("no team %d; site_overview lists team ids", id)
 			}
 			art.TeamIDs = append(art.TeamIDs, id)
+		}
+	}
+	if a.Players != nil {
+		var ids []uuid.UUID
+		for _, v := range *a.Players {
+			id, err := uuid.Parse(strings.TrimPrefix(strings.TrimSpace(v), "/player/"))
+			if err != nil {
+				return "", fmt.Errorf("player %q isn't a /player/<uuid> id; search finds players", v)
+			}
+			ids = append(ids, id)
+		}
+		people, err := s.q.PeopleRefs(ctx, c, ids)
+		if err != nil {
+			return "", err
+		}
+		found := map[uuid.UUID]bool{}
+		for _, p := range people {
+			found[p.ID] = true
+		}
+		for _, id := range ids {
+			if !found[id] {
+				return "", fmt.Errorf("no player %s; search finds players", id)
+			}
+		}
+		art.PersonIDs = nil
+		for _, p := range people {
+			art.PersonIDs = append(art.PersonIDs, p.ID)
+		}
+	}
+	if a.Coaches != nil {
+		var keys []string
+		for _, v := range *a.Coaches {
+			k := strings.TrimPrefix(strings.TrimSpace(v), "/coach/")
+			if u, err := url.PathUnescape(k); err == nil {
+				k = u
+			}
+			keys = append(keys, k)
+		}
+		coaches, err := s.q.CoachRefs(ctx, c, keys)
+		if err != nil {
+			return "", err
+		}
+		found := map[string]bool{}
+		for _, k := range coaches {
+			found[k.Key] = true
+		}
+		for _, k := range keys {
+			if !found[k] {
+				return "", fmt.Errorf("no coach %q; search finds coaches", k)
+			}
+		}
+		art.CoachKeys = nil
+		for _, k := range coaches {
+			art.CoachKeys = append(art.CoachKeys, k.Key)
 		}
 	}
 	if a.Game != nil {

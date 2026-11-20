@@ -40,7 +40,7 @@
       {{if $.CanEdit}}<a class="btn btn-ghost" href="/story/{{$a.ID}}/edit">Edit</a>{{end}}
     </div>
     <div class="story-body">{{.Body}}</div>
-    {{with .Tagged}}<div class="story-tags">{{range .}}<a class="pill" href="/news?team={{.ID}}"><span class="tm">{{template "teamlogo" .}}{{.Name}}</span></a>{{end}}</div>{{end}}
+    {{if or .Tagged .TaggedPeople}}<div class="story-tags">{{range .Tagged}}<a class="pill" href="/news?team={{.ID}}"><span class="tm">{{template "teamlogo" .}}{{.Name}}</span></a>{{end}}{{range .TaggedPeople}}<a class="pill" href="{{.URL}}">{{.Name}}</a>{{end}}</div>{{end}}
   </article>
   <aside>
     {{with .More}}

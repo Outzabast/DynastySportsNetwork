@@ -99,3 +99,35 @@
 {{end}}
 
 {{define "gametag"}}{{$k := .G.Kind}}{{if eq $k "conference"}}<span class="gtag conf">Conference</span>{{else if eq $k "nonconference"}}<span class="gtag">Non-Conf</span>{{else if eq $k "conf_championship"}}<span class="gtag cc">{{.Tag}}</span>{{else if eq $k "bowl"}}<span class="gtag bowl">{{.G.BowlName}}</span>{{else if eq $k "playoff"}}<span class="gtag cfp">{{.G.BowlName}}</span>{{else if eq $k "national_championship"}}<span class="gtag cfp">National Championship</span>{{end}}{{end}}
+
+{{define "newscard"}}{{/* . = *NewsCard */}}
+<div class="card">
+  <h2>{{.Title}} <a href="{{.AllURL}}">All stories</a></h2>
+  {{range .Stories}}<a class="story-mini" href="{{.URL}}">{{if .Image}}<img src="{{.Image}}" alt="" loading="lazy">{{end}}<div><b>{{.Headline}}</b><div class="story-stamp">{{timeAgo .When}}{{with .Byline}} • {{.}}{{end}}</div></div></a>{{end}}
+</div>
+{{end}}
+
+{{define "mdtools"}}{{/* Markdown toolbar; static/mdeditor.js wires it up */}}
+<div class="ed-tools">
+  <button type="button" data-wrap="**" title="Bold"><b>B</b></button>
+  <button type="button" data-wrap="_" title="Italic"><i>I</i></button>
+  <button type="button" data-line="## " title="Subheading">H</button>
+  <button type="button" data-line="> " title="Quote">“”</button>
+  <button type="button" data-line="- " title="List">•</button>
+  <button type="button" data-md-link title="Link">Link</button>
+  <label class="ed-file" title="Insert image">Image<input type="file" accept="image/*" data-md-img></label>
+  <span class="spacer"></span>
+  <button type="button" data-md-toggle>Preview</button>
+</div>
+{{end}}
+
+{{define "biocard"}}{{/* . = page data with BioHTML, BioEditURL, CanEdit */}}
+{{if .BioHTML}}
+<div class="card bio-card">
+  <h2>Bio{{if .CanEdit}} <a href="{{.BioEditURL}}">Edit bio</a>{{end}}</h2>
+  <div class="story-body">{{.BioHTML}}</div>
+</div>
+{{else if .CanEdit}}
+<p class="bio-add"><a href="{{.BioEditURL}}">+ Add a bio</a></p>
+{{end}}
+{{end}}

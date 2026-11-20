@@ -59,10 +59,20 @@ func (s *Site) coach(r *http.Request, c *store.Ctx) (string, data, error) {
 	var p *store.CoachProfile
 	var teams map[int]*store.Team
 	var picks []*store.DraftPick
+	var news []*store.Article
+	var bioMD string
 	err := parallel(
+		func() (err error) { bioMD, err = s.q.CoachBio(ctx, c, key); return },
 		func() (err error) { p, err = s.q.CoachProfile(ctx, c, key); return },
 		func() (err error) { teams, err = s.q.Teams(ctx, c, c.Season); return },
-		func() (err error) { picks, err = s.q.DraftPicks(ctx, c, store.DraftFilter{Team: -1, Coach: key}); return },
+		func() (err error) {
+			picks, err = s.q.DraftPicks(ctx, c, store.DraftFilter{Team: -1, Coach: key})
+			return
+		},
+		func() (err error) {
+			news, err = s.q.Articles(ctx, c, store.ArticleFilter{Team: -1, Coach: key, Season: -1, Limit: 5})
+			return
+		},
 	)
 	if err != nil {
 		return "", nil, err
@@ -153,7 +163,9 @@ func (s *Site) coach(r *http.Request, c *store.Ctx) (string, data, error) {
 	}
 	return "coach", data{"K": k, "Current": current, "Stints": rows, "Logs": logs, "Teams": teams,
 		"HCW": hcW, "HCL": hcL, "BowlW": bowlW, "BowlL": bowlL, "CFPW": cfpW, "CFPL": cfpL, "ConfTitles": confTitles,
-		"Schools": len(schools), "Seasons": len(p.Stints), "Draft": picks, "FirstRound": firstRounders(picks)}, nil
+		"Schools": len(schools), "Seasons": len(p.Stints), "Draft": picks, "FirstRound": firstRounders(picks),
+		"News":    newsCard(strings.TrimSpace(k.First+" "+k.Last)+" News", "/news?coach="+url.QueryEscape(key), s.storyCards(teams, news)),
+		"BioHTML": bioHTML(bioMD), "BioEditURL": coachURL(key) + "/bio"}, nil
 }
 
 // HistoryRow is one season on a team's history page.

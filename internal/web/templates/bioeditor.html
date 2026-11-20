@@ -1,0 +1,27 @@
+{{define "title"}}{{.S.Name}} Bio{{end}}
+{{define "content"}}
+{{$s := .S}}
+<h1 class="page-title">{{if $s.Coach}}Coach {{end}}{{$s.Name}}: Bio</h1>
+{{with .Error}}<div class="card card-b loss">{{.}}</div>{{end}}
+<form class="editor" method="post" action="{{$s.EditURL}}">
+  <div class="grid g-2">
+    <div>
+      <div class="card" data-md-editor>
+        {{template "mdtools"}}
+        <textarea name="body" data-md-body rows="20" placeholder="Write in Markdown. Blank line between paragraphs. ## for a subheading, [text](/team/124) for a link.">{{.Body}}</textarea>
+        <div class="story-body ed-preview" data-md-preview hidden></div>
+      </div>
+    </div>
+    <div>
+      <div class="card card-b">
+        <button class="btn" type="submit">Save</button>
+        <a class="btn btn-ghost" href="{{$s.URL}}">Cancel</a>
+        <p class="muted small">The bio shows on {{if $s.Coach}}the coach's{{else}}the player's{{end}} page. Save it empty to remove it.</p>
+        <p class="muted small">Stick to what a fan could know: no ratings, development traits or other game internals.</p>
+        {{if $s.Coach}}<p class="muted small">Coaches are matched by name and portrait. The game can reuse both, so two coaches who share them share one page and one bio.</p>{{end}}
+      </div>
+    </div>
+  </div>
+</form>
+<script src="/static/mdeditor.js?v={{assetVersion}}"></script>
+{{end}}

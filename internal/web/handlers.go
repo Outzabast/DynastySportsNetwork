@@ -989,7 +989,8 @@ func (s *Site) team(r *http.Request, c *store.Ctx) (string, data, error) {
 		}
 	}
 	return "team", data{"T": t, "Season": season, "Schedule": sched, "Leaders": leaders, "Coaches": coaches, "Injuries": inj,
-		"Rivalries": riv, "Teams": teams, "Recruits": recruits, "Conf": confTable, "Tab": "home", "Stories": s.storyCards(teams, news)}, nil
+		"Rivalries": riv, "Teams": teams, "Recruits": recruits, "Conf": confTable, "Tab": "home",
+		"News": newsCard(t.Name+" News", fmt.Sprintf("/news?team=%d", t.ID), s.storyCards(teams, news))}, nil
 }
 
 func (s *Site) teamRoster(r *http.Request, c *store.Ctx) (string, data, error) {
@@ -1264,6 +1265,14 @@ func (s *Site) player(r *http.Request, c *store.Ctx) (string, data, error) {
 	if err != nil {
 		return "", nil, err
 	}
+	news, err := s.q.Articles(ctx, c, store.ArticleFilter{Team: -1, Person: id, Season: -1, Limit: 5})
+	if err != nil {
+		return "", nil, err
+	}
+	bioMD, err := s.q.PlayerBio(ctx, c, id)
+	if err != nil {
+		return "", nil, err
+	}
 	var draft *store.DraftPick
 	if len(picks) > 0 {
 		draft = picks[0]
@@ -1271,7 +1280,9 @@ func (s *Site) player(r *http.Request, c *store.Ctx) (string, data, error) {
 	raw := rawStatTable(lines, c)
 	return "player", data{"P": bio, "Team": teamOr(teams, bio.TeamID), "Tables": tables, "LogTables": logTables, "LogYear": c.YearOf(logSeason),
 		"LogTeam": logTeam, "LogTabs": logTabs, "NoLog": strings.Join(noLog, ", "), "Stints": stints,
-		"Awards": awards, "Transactions": playerTransactions(events, picks, stints, teams, c), "Draft": draft, "Raw": raw, "Teams": teams}, nil
+		"Awards": awards, "Transactions": playerTransactions(events, picks, stints, teams, c), "Draft": draft, "Raw": raw, "Teams": teams,
+		"News":    newsCard(bio.Name()+" News", "/news?player="+id.String(), s.storyCards(teams, news)),
+		"BioHTML": bioHTML(bioMD), "BioEditURL": "/player/" + id.String() + "/bio"}, nil
 }
 
 // LogTab is one season choice above a player's game log.

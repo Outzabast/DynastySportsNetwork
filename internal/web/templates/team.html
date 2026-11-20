@@ -4,12 +4,7 @@
 {{$t := .T}}{{$teams := .Teams}}
 <div class="grid g-2">
   <div>
-    {{with .Stories}}
-    <div class="card">
-      <h2>{{$t.Name}} News <a href="/news?team={{$t.ID}}">All stories</a></h2>
-      {{range .}}<a class="story-mini" href="{{.URL}}">{{if .Image}}<img src="{{.Image}}" alt="" loading="lazy">{{end}}<div><b>{{.Headline}}</b><div class="story-stamp">{{timeAgo .When}}{{with .Byline}} • {{.}}{{end}}</div></div></a>{{end}}
-    </div>
-    {{end}}
+    {{with .News}}{{template "newscard" .}}{{end}}
     {{with .Leaders}}
     <div class="card">
       <h2>Team Leaders <a href="/team/{{$t.ID}}/stats">Full stats</a></h2>

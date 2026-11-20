@@ -864,7 +864,7 @@ func (in *ingest) write(ctx context.Context) error {
 		id, ok := in.persons[row]
 		return id, ok
 	}
-	if n, err := recordDraft(ctx, tx, b, sid, in.pos, snap, drafted, func(kind string, detail any) error { return in.flag(ctx, kind, detail) }); err != nil {
+	if n, err := recordDraft(ctx, tx, b, sid, in.pos, snap, drafted, func(kind string, detail any) error { return in.flag(ctx, kind, detail) }, 0); err != nil {
 		return err
 	} else if n > 0 {
 		in.res.Notes = append(in.res.Notes, fmt.Sprintf("NFL draft: %d picks recorded", n))

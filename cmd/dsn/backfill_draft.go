@@ -21,7 +21,12 @@ func runBackfillDraftAwards(args []string) error {
 	var c config
 	fs := flag.NewFlagSet("backfill-draft-awards", flag.ExitOnError)
 	c.bind(fs)
+	only := fs.Int("snapshot", 0, "redo only this snapshot's draft (needs -prev)")
+	prev := fs.Int("prev", 0, "with -snapshot: compare with this earlier snapshot's stored draft state, e.g. the last save before a draft whose post-draft saves were pruned")
 	fs.Parse(args)
+	if (*only == 0) != (*prev == 0) {
+		return fmt.Errorf("-snapshot and -prev go together")
+	}
 	ctx := context.Background()
 	st, err := store.Open(ctx, c.DB)
 	if err != nil {
@@ -30,7 +35,7 @@ func runBackfillDraftAwards(args []string) error {
 	defer st.Close()
 
 	rows, err := st.DB.Query(ctx, `SELECT id, archive_path, save_name FROM snapshot
-		WHERE archive_pruned_at IS NULL ORDER BY branch_id, pos, id`)
+		WHERE archive_pruned_at IS NULL AND ($1 = 0 OR id = $1) ORDER BY branch_id, pos, id`, *only)
 	if err != nil {
 		return err
 	}
@@ -69,7 +74,7 @@ func runBackfillDraftAwards(args []string) error {
 		if err != nil {
 			return fmt.Errorf("snapshot %d: extract: %w", it.id, err)
 		}
-		p, err := st.BackfillDraft(ctx, it.id, snap)
+		p, err := st.BackfillDraft(ctx, it.id, snap, *prev)
 		if err != nil {
 			return fmt.Errorf("snapshot %d: draft: %w", it.id, err)
 		}

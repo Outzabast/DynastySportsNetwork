@@ -62,6 +62,90 @@ func newPicks(prev, cur draftState) int {
 	return n
 }
 
+// maxCoachSurplus is how many more picks the head coaches' counts may grow
+// by than the draft rows show. The 2036 draft (2037 offseason) credited one
+// coach a pick no player on his team accounts for, with every round full.
+const maxCoachSurplus = 2
+
+// draftPicks finds the draft's picks: the EarlyNFL rows that changed since
+// prev. A pick whose projection came true in the same list row doesn't
+// change, so when the changed rows fall short of the coaches' count, a
+// round with fewer picks than the others is filled from that round's
+// unchanged rows of teams whose head coach gained more picks than the
+// team's changed rows, but only when exactly the missing number of such
+// rows exists. The result must give every round 1-7 the same number of
+// picks, no team more picks than its coach gained, and at most
+// maxCoachSurplus fewer picks than the coaches gained. ok is false when it
+// can't; detail says what was reconciled (nil when nothing needed it).
+func draftPicks(prev draftState, snap *extract.Snapshot, drafted int) (picks []extract.LeavingPlayer, ok bool, detail map[string]any) {
+	var unchanged []extract.LeavingPlayer
+	for _, l := range snap.LeavingPlayers {
+		if !isDraftRow(l) {
+			continue
+		}
+		if prev.Rows[strconv.Itoa(l.Row)] != draftSig(l) {
+			picks = append(picks, l)
+		} else {
+			unchanged = append(unchanged, l)
+		}
+	}
+	if len(picks) == drafted {
+		return picks, true, nil
+	}
+	detail = map[string]any{"changedRows": len(picks), "coachPicks": drafted}
+
+	growth := map[int]int{} // team -> head coach's new picks
+	for _, c := range snap.Coaches {
+		k := fmt.Sprintf("%d:%s %s", c.Row, c.FirstName, c.LastName)
+		if p, had := prev.HC[k]; had && c.Position == "HeadCoach" && c.DraftPicks > p {
+			growth[c.TeamID] += c.DraftPicks - p
+		}
+	}
+	teamPicks, roundPicks := map[int]int{}, map[int]int{}
+	for _, l := range picks {
+		teamPicks[l.TeamID]++
+		roundPicks[draftRound(l)]++
+	}
+	full := 0
+	for r := 1; r <= 7; r++ {
+		full = max(full, roundPicks[r])
+	}
+	var added []string
+	for r := 1; r <= 7; r++ {
+		need := full - roundPicks[r]
+		if need == 0 {
+			continue
+		}
+		var cands []extract.LeavingPlayer
+		for _, l := range unchanged {
+			if draftRound(l) == r && growth[l.TeamID] > teamPicks[l.TeamID] {
+				cands = append(cands, l)
+			}
+		}
+		if len(cands) != need {
+			detail["round"], detail["candidates"] = r, len(cands)
+			return nil, false, detail
+		}
+		for _, l := range cands {
+			picks = append(picks, l)
+			teamPicks[l.TeamID]++
+			roundPicks[r]++
+			added = append(added, fmt.Sprintf("player row %d, team %d, round %d", l.PlayerRow, l.TeamID, r))
+		}
+	}
+	for team, n := range teamPicks {
+		if n > growth[team] {
+			detail["overTeam"] = team
+			return nil, false, detail
+		}
+	}
+	if full == 0 || drafted-len(picks) < 0 || drafted-len(picks) > maxCoachSurplus {
+		return nil, false, detail
+	}
+	detail["added"], detail["picks"] = added, len(picks)
+	return picks, true, detail
+}
+
 // draftRound is the round of an EarlyNFL row: its ProjectRound, or the
 // round in the type name.
 func draftRound(l extract.LeavingPlayer) int {
@@ -77,16 +161,29 @@ func draftRound(l extract.LeavingPlayer) int {
 // through person; a pick whose player has no person is skipped and flagged.
 // A changed-row count that disagrees with the coaches' count is flagged and
 // nothing is written: guessing would put draft results on the wrong people.
+//
+// prevID, when not 0, names the snapshot to compare with instead of the
+// branch's previous one (for redoing a draft whose post-draft saves were
+// pruned from the archive).
 func recordDraft(ctx context.Context, tx pgx.Tx, branch, snapID int, pos int64, snap *extract.Snapshot,
-	person func(row int) (uuid.UUID, bool), flag func(kind string, detail any) error) (int, error) {
+	person func(row int) (uuid.UUID, bool), flag func(kind string, detail any) error, prevID int) (int, error) {
 	cur := draftStateOf(snap)
 	if _, err := tx.Exec(ctx, `UPDATE snapshot SET draft_state = $2 WHERE id = $1`, snapID, js(cur)); err != nil {
 		return 0, err
 	}
 	var raw []byte
-	err := tx.QueryRow(ctx, `SELECT draft_state FROM snapshot
-		WHERE branch_id = $1 AND draft_state IS NOT NULL AND (pos, id) < ($2, $3)
-		ORDER BY pos DESC, id DESC LIMIT 1`, branch, pos, snapID).Scan(&raw)
+	var err error
+	if prevID != 0 {
+		err = tx.QueryRow(ctx, `SELECT draft_state FROM snapshot WHERE id = $1 AND branch_id = $2
+			AND draft_state IS NOT NULL AND (pos, id) < ($3, $4)`, prevID, branch, pos, snapID).Scan(&raw)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return 0, fmt.Errorf("snapshot %d: no earlier draft state on branch %d to compare with", prevID, branch)
+		}
+	} else {
+		err = tx.QueryRow(ctx, `SELECT draft_state FROM snapshot
+			WHERE branch_id = $1 AND draft_state IS NOT NULL AND (pos, id) < ($2, $3)
+			ORDER BY pos DESC, id DESC LIMIT 1`, branch, pos, snapID).Scan(&raw)
+	}
 	if errors.Is(err, pgx.ErrNoRows) {
 		return 0, nil
 	}
@@ -101,14 +198,14 @@ func recordDraft(ctx context.Context, tx pgx.Tx, branch, snapID int, pos int64, 
 	if drafted == 0 {
 		return 0, nil
 	}
-	var picks []extract.LeavingPlayer
-	for _, l := range snap.LeavingPlayers {
-		if isDraftRow(l) && prev.Rows[strconv.Itoa(l.Row)] != draftSig(l) {
-			picks = append(picks, l)
-		}
+	picks, ok, detail := draftPicks(prev, snap, drafted)
+	if !ok {
+		return 0, flag("draft_mismatch", detail)
 	}
-	if len(picks) != drafted {
-		return 0, flag("draft_mismatch", map[string]any{"changedRows": len(picks), "coachPicks": drafted})
+	if detail != nil {
+		if err := flag("draft_reconciled", detail); err != nil {
+			return 0, err
+		}
 	}
 
 	// The draft follows the season it ends; a save already in the next
@@ -180,7 +277,8 @@ func personsAt(ctx context.Context, q interface {
 // BackfillDraft records an already-ingested snapshot's draft state, and its
 // draft picks if the draft ran since the branch's previous recorded state.
 // Snapshots must be fed in timeline order. It returns the picks written.
-func (s *Store) BackfillDraft(ctx context.Context, snapshotID int, snap *extract.Snapshot) (int, error) {
+// prevID, when not 0, is the snapshot to compare with (see recordDraft).
+func (s *Store) BackfillDraft(ctx context.Context, snapshotID int, snap *extract.Snapshot, prevID int) (int, error) {
 	var branch, dyn int
 	var pos int64
 	if err := s.DB.QueryRow(ctx, `SELECT branch_id, dynasty_id, pos FROM snapshot WHERE id = $1`, snapshotID).Scan(&branch, &dyn, &pos); err != nil {
@@ -201,7 +299,7 @@ func (s *Store) BackfillDraft(ctx context.Context, snapshotID int, snap *extract
 			dyn, branch, snapshotID, kind, b)
 		return err
 	}
-	n, err := recordDraft(ctx, tx, branch, snapshotID, pos, snap, person, flag)
+	n, err := recordDraft(ctx, tx, branch, snapshotID, pos, snap, person, flag, prevID)
 	if err != nil {
 		return 0, err
 	}

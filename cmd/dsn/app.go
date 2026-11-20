@@ -141,12 +141,44 @@ func runReingest(args []string) error {
 	var c config
 	fs := flag.NewFlagSet("reingest", flag.ExitOnError)
 	c.bind(fs)
-	target := fs.String("into", "", "Postgres URL of an EMPTY database to rebuild into (required)")
+	target := fs.String("into", "", "Postgres URL of an EMPTY database to rebuild into (required unless -plan)")
+	fromArchive := fs.Bool("from-archive", false, "replay data/archive in file-time order without reading the old database")
+	plan := fs.Bool("plan", false, "with -from-archive: dry run; extract every save and print how it would reconcile, write nothing")
 	fs.Parse(args)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if *fromArchive {
+		saves, err := listArchive(c.DataDir)
+		if err != nil {
+			return err
+		}
+		if *plan {
+			_, err := planReplay(ctx, c, saves, os.Stdout)
+			return err
+		}
+		if *target == "" {
+			return fmt.Errorf("-into is required; reingest never rewrites the live database in place")
+		}
+		dc := c
+		dc.DB = *target
+		p, err := openPipeline(ctx, dc)
+		if err != nil {
+			return err
+		}
+		defer p.store.Close()
+		if n, err := p.store.SnapshotCount(ctx); err != nil {
+			return err
+		} else if n > 0 {
+			return fmt.Errorf("-into database already has %d snapshots; replay needs an empty database", n)
+		}
+		return replayArchive(ctx, p, c, saves)
+	}
+	if *plan {
+		return fmt.Errorf("-plan needs -from-archive")
+	}
 	if *target == "" {
 		return fmt.Errorf("-into is required; reingest never rewrites the live database in place")
 	}
-	ctx := context.Background()
 	src, err := store.Open(ctx, c.DB)
 	if err != nil {
 		return err

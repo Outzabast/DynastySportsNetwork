@@ -66,6 +66,13 @@ func connectCause(err error) error {
 	return err
 }
 
+// SnapshotCount returns how many snapshots the database holds.
+func (s *Store) SnapshotCount(ctx context.Context) (int, error) {
+	var n int
+	err := s.DB.QueryRow(ctx, `SELECT count(*) FROM snapshot`).Scan(&n)
+	return n, err
+}
+
 // LatestSnapshotID returns the newest snapshot's id (0 when none). A reader
 // on another machine polls it to learn that the collector ingested a save.
 func (s *Store) LatestSnapshotID(ctx context.Context) (int, error) {
